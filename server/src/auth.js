@@ -10,7 +10,7 @@ export function signToken(user) {
       accountId: user.accountId
     },
     config.jwtSecret,
-    { expiresIn: "8h" }
+    { algorithm: "HS256", expiresIn: "8h" }
   );
 }
 
@@ -23,7 +23,7 @@ export async function requireAuth(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret);
+    const payload = jwt.verify(token, config.jwtSecret, { algorithms: ["HS256"] });
     const user = store.findUserById(payload.sub);
 
     if (!user) {
@@ -49,8 +49,16 @@ export function requireRole(...roles) {
 }
 
 export function accountScopeFor(user, requestedAccountId) {
-  if (user.role === "DEVELOPER") {
-    return requestedAccountId ? { accountId: requestedAccountId } : {};
+  if (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") {
+    return requestedAccountId && requestedAccountId !== "all" ? { accountId: requestedAccountId } : {};
+  }
+
+  return { accountId: user.accountId };
+}
+
+export function recordScopeFor(user) {
+  if (user.role === "BRANCH_MANAGER" || user.role === "TECHNICIAN") {
+    return { accountId: user.accountId, branchId: user.branchId, role: user.role, userId: user.id };
   }
 
   return { accountId: user.accountId };

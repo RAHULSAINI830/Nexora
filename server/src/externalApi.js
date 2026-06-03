@@ -1,38 +1,22 @@
 import { config } from "./config.js";
 
-const demoRecords = [
-  {
-    sourceId: "demo-001",
-    title: "Active API Users",
-    metric: 1240,
-    status: "healthy",
-    occurredAt: new Date().toISOString()
-  },
-  {
-    sourceId: "demo-002",
-    title: "Pending Reviews",
-    metric: 37,
-    status: "attention",
-    occurredAt: new Date().toISOString()
-  },
-  {
-    sourceId: "demo-003",
-    title: "Monthly Revenue",
-    metric: 84500,
-    status: "healthy",
-    occurredAt: new Date().toISOString()
-  }
-];
+export async function fetchExternalDashboardData(params = {}) {
+  const apiUrl = config.externalApiUrl || "https://data.otterly.ai/v1/reports/brand";
+  const apiKey = config.externalApiKey;
 
-export async function fetchExternalDashboardData() {
-  if (!config.externalApiUrl) {
-    return demoRecords;
+  if (!apiKey) {
+    throw new Error("EXTERNAL_API_KEY is required to sync external dashboard data");
   }
 
-  const response = await fetch(config.externalApiUrl, {
+  const url = new URL(apiUrl);
+  if (params.accountId) {
+    url.searchParams.append("workspaceId", params.accountId);
+  }
+
+  const response = await fetch(url.toString(), {
     headers: {
       Accept: "application/json",
-      ...(config.externalApiKey ? { Authorization: `Bearer ${config.externalApiKey}` } : {})
+      Authorization: `Bearer ${apiKey}`
     }
   });
 
@@ -41,18 +25,18 @@ export async function fetchExternalDashboardData() {
   }
 
   const payload = await response.json();
-  const records = Array.isArray(payload) ? payload : payload.data;
+  const records = Array.isArray(payload) ? payload : (payload.items || payload.data || []);
 
   if (!Array.isArray(records)) {
-    throw new Error("External API response must be an array or { data: [] }");
+    throw new Error("External API response must be an array or contain an 'items' array");
   }
 
   return records.map((record, index) => ({
-    sourceId: String(record.id ?? record.sourceId ?? `external-${index}`),
-    title: String(record.title ?? record.name ?? "Untitled metric"),
-    metric: Number(record.metric ?? record.value ?? 0),
-    status: String(record.status ?? "unknown"),
-    occurredAt: String(record.occurredAt ?? record.createdAt ?? new Date().toISOString()),
+    sourceId: String(record.id ?? `external-${index}`),
+    title: String(record.brand || record.reportTitle || "Untitled Brand Report"),
+    metric: Number(record.competitors?.length ?? 0),
+    status: "healthy",
+    occurredAt: String(record.updatedDate || record.createdDate || new Date().toISOString()),
     raw: record
   }));
 }
