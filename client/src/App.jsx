@@ -1471,6 +1471,21 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     }
   }
 
+  async function handleUnverifyUser(targetUser) {
+    if (!window.confirm(`Mark ${targetUser.name} as unverified? They will need OTP verification before their next login.`)) {
+      return;
+    }
+
+    setNotice("");
+    try {
+      const data = await apiRequest(`/auth/users/${targetUser.id}/unverify-email`, { method: "POST" });
+      setNotice(data.message);
+      await loadUsers(userMgmtCompanyFilter || selectedAccountId);
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
   async function handleSendVerification(targetUser) {
     setNotice("");
     try {
@@ -1480,6 +1495,15 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     } catch (err) {
       setNotice(err.message);
     }
+  }
+
+  function verificationStatusTitle(targetUser) {
+    if (!targetUser.emailVerified) return "Email verification pending";
+    if (targetUser.emailVerificationMethod === "developer") {
+      return `Verified by Developer: ${targetUser.emailVerifiedBy?.name || "Developer"}`;
+    }
+    if (targetUser.emailVerificationMethod === "otp") return "Verified by email OTP";
+    return "Verified by system or existing account migration";
   }
 
   const totals = useMemo(() => {
@@ -1606,7 +1630,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
             <span className={`status role-${node.role.toLowerCase()}`} style={{ margin: 0, padding: '3px 8px', fontSize: '10px' }}>
               {roleLabels[node.role]}
             </span>
-            <span className={`verification-status ${node.emailVerified ? "verified" : "pending"}`}>
+            <span className={`verification-status ${node.emailVerified ? "verified" : "pending"}`} title={verificationStatusTitle(node)}>
               {node.emailVerified ? "Verified" : "Pending"}
             </span>
             {node.branch?.name && (
@@ -1615,7 +1639,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
               </span>
             )}
             
-            {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && !node.emailVerified) ? (
+            {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && node.id !== user.id) ? (
               <div className="action-buttons" style={{ display: 'flex', gap: '4px' }}>
                 {user.role === "DEVELOPER" && !node.emailVerified ? (
                   <>
@@ -1626,6 +1650,11 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                       <CheckCircle size={14} />
                     </button>
                   </>
+                ) : null}
+                {user.role === "DEVELOPER" && node.emailVerified && node.id !== user.id ? (
+                  <button className="icon-button warning" onClick={() => handleUnverifyUser(node)} title={`Mark ${node.name} as unverified`}>
+                    <AlertCircle size={14} />
+                  </button>
                 ) : null}
                 {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) ? (
                   <>
@@ -1882,29 +1911,6 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                 {userMgmtViewMode === "tree" ? (
                   /* Visual Grouped Tree Hierarchy Mode */
                   <div className="visual-tree-view-container" style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    <section className="role-hierarchy-reference" aria-label="Role hierarchy">
-                      <h4>Role Hierarchy</h4>
-                      <div className="role-hierarchy-tree">
-                        <div className="role-hierarchy-node role-developer">Developer</div>
-                        <div className="role-hierarchy-children">
-                          <div className="role-hierarchy-node role-super_admin">Super Admin</div>
-                          <div className="role-hierarchy-children">
-                            <div className="role-hierarchy-node role-business_owner">Business Owner</div>
-                            <div className="role-hierarchy-children role-hierarchy-grid">
-                              <div className="role-hierarchy-node role-marketing_manager">Marketing Manager</div>
-                              <div className="role-hierarchy-node role-operations_manager">Operations Manager</div>
-                              <div className="role-hierarchy-branch">
-                                <div className="role-hierarchy-node role-branch_manager">Branch Manager</div>
-                                <div className="role-hierarchy-children">
-                                  <div className="role-hierarchy-node role-technician">Technician</div>
-                                </div>
-                              </div>
-                              <div className="role-hierarchy-node role-analyst">Read-Only Analyst</div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </section>
                     {groupedByCompany.map((group) => {
                       const treeRoots = buildUserTree(group.users);
                       const isGlobalGroup = group.id === "global";
@@ -2009,12 +2015,12 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                               <span className="admin-name">{managedUser.admin?.name ?? (managedUser.role === "BUSINESS_OWNER" || managedUser.role === "SUPER_ADMIN" || managedUser.role === "DEVELOPER" ? "Self managed" : "Unassigned")}</span>
                             </td>
                             <td>
-                              <span className={`verification-status ${managedUser.emailVerified ? "verified" : "pending"}`}>
+                              <span className={`verification-status ${managedUser.emailVerified ? "verified" : "pending"}`} title={verificationStatusTitle(managedUser)}>
                                 {managedUser.emailVerified ? "Verified" : "Pending"}
                               </span>
                             </td>
                              <td className="align-right">
-                              {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && !managedUser.emailVerified) ? (
+                              {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && managedUser.id !== user.id) ? (
                                 <div className="action-buttons">
                                   {user.role === "DEVELOPER" && !managedUser.emailVerified ? (
                                     <>
@@ -2025,6 +2031,11 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                                         <CheckCircle size={16} />
                                       </button>
                                     </>
+                                  ) : null}
+                                  {user.role === "DEVELOPER" && managedUser.emailVerified && managedUser.id !== user.id ? (
+                                    <button className="icon-button warning" onClick={() => handleUnverifyUser(managedUser)} title={`Mark ${managedUser.name} as unverified`}>
+                                      <AlertCircle size={16} />
+                                    </button>
                                   ) : null}
                                   {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) ? (
                                     <>

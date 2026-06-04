@@ -143,7 +143,7 @@ authRoutes.post("/verify-email", async (req, res) => {
     return res.status(400).json({ message: "Verification code is incorrect" });
   }
 
-  const verifiedUser = await store.markEmailVerified(user.id);
+  const verifiedUser = await store.markEmailVerified(user.id, { method: "otp" });
   res.json({
     token: signToken(verifiedUser),
     user: safeUser(verifiedUser)
@@ -175,10 +175,35 @@ authRoutes.post("/users/:id/verify-email", requireAuth, requireRole("DEVELOPER")
     return res.json({ user: safeUser(targetUser), message: `${targetUser.name} is already verified.` });
   }
 
-  const verifiedUser = await store.markEmailVerified(targetUser.id);
+  const verifiedUser = await store.markEmailVerified(targetUser.id, {
+    method: "developer",
+    verifiedByUserId: req.user.id
+  });
   res.json({
     user: safeUser(verifiedUser),
     message: `${targetUser.name} was verified manually.`
+  });
+});
+
+authRoutes.post("/users/:id/unverify-email", requireAuth, requireRole("DEVELOPER"), async (req, res) => {
+  const targetUser = await store.findUserById(req.params.id);
+  if (!targetUser) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  if (targetUser.id === req.user.id) {
+    return res.status(400).json({ message: "You cannot unverify your own Developer account" });
+  }
+
+  if (!targetUser.emailVerified) {
+    return res.json({ user: safeUser(targetUser), message: `${targetUser.name} is already unverified.` });
+  }
+
+  await store.clearEmailVerification(targetUser.id);
+  const unverifiedUser = await store.findUserById(targetUser.id);
+  res.json({
+    user: safeUser(unverifiedUser),
+    message: `${targetUser.name} was marked as unverified.`
   });
 });
 

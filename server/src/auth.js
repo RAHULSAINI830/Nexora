@@ -30,6 +30,10 @@ export async function requireAuth(req, res, next) {
       return res.status(401).json({ message: "User no longer exists" });
     }
 
+    if (!user.emailVerified) {
+      return res.status(401).json({ message: "Email verification is required" });
+    }
+
     delete user.passwordHash;
     delete user.verificationCodeHash;
     delete user.verificationCodeExpiresAt;

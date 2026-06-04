@@ -73,6 +73,8 @@ const schemaStatements = [
     admin_id TEXT,
     branch_id TEXT,
     email_verified_at TEXT,
+    email_verification_method TEXT,
+    email_verified_by_user_id TEXT,
     verification_code_hash TEXT,
     verification_code_expires_at TEXT,
     verification_sent_at TEXT,
@@ -80,7 +82,8 @@ const schemaStatements = [
     updated_at TEXT NOT NULL,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL,
     FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL,
-    FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE SET NULL
+    FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE SET NULL,
+    FOREIGN KEY (email_verified_by_user_id) REFERENCES users(id) ON DELETE SET NULL
   )`,
   `CREATE TABLE IF NOT EXISTS dashboard_records (
     id TEXT PRIMARY KEY,
@@ -145,29 +148,53 @@ async function runMigrations() {
     sql: "SELECT id FROM schema_migrations WHERE id = ?",
     args: [migrationId]
   });
-  if (existing.rows.length) return;
+  if (!existing.rows.length) {
+    const columns = await db.execute("PRAGMA table_info(users)");
+    const columnNames = new Set(columns.rows.map((column) => column.name));
+    for (const [name, type] of [
+      ["email_verified_at", "TEXT"],
+      ["verification_code_hash", "TEXT"],
+      ["verification_code_expires_at", "TEXT"],
+      ["verification_sent_at", "TEXT"]
+    ]) {
+      if (!columnNames.has(name)) {
+        await db.execute(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+      }
+    }
 
-  const columns = await db.execute("PRAGMA table_info(users)");
-  const columnNames = new Set(columns.rows.map((column) => column.name));
+    const timestamp = now();
+    await db.execute({
+      sql: "UPDATE users SET email_verified_at = ? WHERE email_verified_at IS NULL",
+      args: [timestamp]
+    });
+    await db.execute({
+      sql: "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+      args: [migrationId, timestamp]
+    });
+  }
+
+  const auditMigrationId = "2026-06-04-email-verification-audit";
+  const auditExisting = await db.execute({
+    sql: "SELECT id FROM schema_migrations WHERE id = ?",
+    args: [auditMigrationId]
+  });
+  if (auditExisting.rows.length) return;
+
+  const auditColumns = await db.execute("PRAGMA table_info(users)");
+  const auditColumnNames = new Set(auditColumns.rows.map((column) => column.name));
   for (const [name, type] of [
-    ["email_verified_at", "TEXT"],
-    ["verification_code_hash", "TEXT"],
-    ["verification_code_expires_at", "TEXT"],
-    ["verification_sent_at", "TEXT"]
+    ["email_verification_method", "TEXT"],
+    ["email_verified_by_user_id", "TEXT"]
   ]) {
-    if (!columnNames.has(name)) {
+    if (!auditColumnNames.has(name)) {
       await db.execute(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
     }
   }
-
-  const timestamp = now();
-  await db.execute({
-    sql: "UPDATE users SET email_verified_at = ? WHERE email_verified_at IS NULL",
-    args: [timestamp]
-  });
+  const auditTimestamp = now();
+  await db.execute("UPDATE users SET email_verification_method = 'system' WHERE email_verified_at IS NOT NULL AND email_verification_method IS NULL");
   await db.execute({
     sql: "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-    args: [migrationId, timestamp]
+    args: [auditMigrationId, auditTimestamp]
   });
 }
 
@@ -222,6 +249,11 @@ function mapUser(row) {
     branchId: row.branch_id,
     emailVerifiedAt: row.email_verified_at,
     emailVerified: Boolean(row.email_verified_at),
+    emailVerificationMethod: row.email_verification_method,
+    emailVerifiedByUserId: row.email_verified_by_user_id,
+    emailVerifiedBy: row.email_verified_by_user_id
+      ? { id: row.email_verified_by_user_id, name: row.verifier_name, email: row.verifier_email }
+      : null,
     verificationCodeHash: row.verification_code_hash,
     verificationCodeExpiresAt: row.verification_code_expires_at,
     verificationSentAt: row.verification_sent_at,
@@ -278,11 +310,13 @@ function mapIntegration(row) {
 
 const userSelect = `
   SELECT users.*, accounts.name AS account_name, accounts.slug AS account_slug,
-    admins.name AS admin_name, admins.email AS admin_email, branches.name AS branch_name
+    admins.name AS admin_name, admins.email AS admin_email, branches.name AS branch_name,
+    verifiers.name AS verifier_name, verifiers.email AS verifier_email
   FROM users
   LEFT JOIN accounts ON accounts.id = users.account_id
   LEFT JOIN users admins ON admins.id = users.admin_id
   LEFT JOIN branches ON branches.id = users.branch_id
+  LEFT JOIN users verifiers ON verifiers.id = users.email_verified_by_user_id
 `;
 
 export const INTEGRATION_PLATFORMS = [
@@ -366,14 +400,16 @@ export const store = {
 
   async createUser({
     id, email, name, passwordHash, role, accountId = null, adminId = null, branchId = null,
-    emailVerifiedAt = null
+    emailVerifiedAt = null, emailVerificationMethod = emailVerifiedAt ? "system" : null
   }) {
     const timestamp = now();
     const finalId = id || randomUUID();
     await execute(`INSERT INTO users (
-      id, email, name, password_hash, role, account_id, admin_id, branch_id, email_verified_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [finalId, email, name, passwordHash, role, accountId, adminId, branchId, emailVerifiedAt, timestamp, timestamp]);
+      id, email, name, password_hash, role, account_id, admin_id, branch_id,
+      email_verified_at, email_verification_method, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [finalId, email, name, passwordHash, role, accountId, adminId, branchId,
+      emailVerifiedAt, emailVerificationMethod, timestamp, timestamp]);
     return this.findUserById(finalId);
   },
 
@@ -383,16 +419,18 @@ export const store = {
     [codeHash, expiresAt, now(), now(), id]);
   },
 
-  async markEmailVerified(id) {
+  async markEmailVerified(id, { method = "otp", verifiedByUserId = null } = {}) {
     const timestamp = now();
-    await execute(`UPDATE users SET email_verified_at = ?, verification_code_hash = NULL,
+    await execute(`UPDATE users SET email_verified_at = ?, email_verification_method = ?,
+      email_verified_by_user_id = ?, verification_code_hash = NULL,
       verification_code_expires_at = NULL, updated_at = ? WHERE id = ?`,
-    [timestamp, timestamp, id]);
+    [timestamp, method, verifiedByUserId, timestamp, id]);
     return this.findUserById(id);
   },
 
   async clearEmailVerification(id) {
-    await execute(`UPDATE users SET email_verified_at = NULL, verification_code_hash = NULL,
+    await execute(`UPDATE users SET email_verified_at = NULL, email_verification_method = NULL,
+      email_verified_by_user_id = NULL, verification_code_hash = NULL,
       verification_code_expires_at = NULL, verification_sent_at = NULL, updated_at = ? WHERE id = ?`,
     [now(), id]);
   },
@@ -524,8 +562,9 @@ async function bootstrapDeveloper() {
   const timestamp = now();
   await db.execute({
     sql: `INSERT INTO users (
-      id, email, name, password_hash, role, account_id, admin_id, branch_id, email_verified_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'DEVELOPER', NULL, NULL, NULL, ?, ?, ?)`,
+      id, email, name, password_hash, role, account_id, admin_id, branch_id,
+      email_verified_at, email_verification_method, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'DEVELOPER', NULL, NULL, NULL, ?, 'system', ?, ?)`,
     args: [randomUUID(), config.bootstrapDeveloperEmail, "Cortexy Developer",
       bcrypt.hashSync(config.bootstrapDeveloperPassword, 12), timestamp, timestamp, timestamp]
   });

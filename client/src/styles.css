@@ -787,6 +787,11 @@ th:last-child {
   color: #059669;
 }
 
+.icon-button.warning:hover {
+  background: #fffbeb;
+  color: #b45309;
+}
+
 .verification-status {
   border: 1px solid;
   border-radius: 999px;
@@ -2405,91 +2410,6 @@ th:last-child {
 
 .tree-node-children > .tree-node-wrapper.is-child:last-child::before {
   height: 34px;
-}
-
-.role-hierarchy-reference {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  overflow-x: auto;
-  padding: 20px;
-}
-
-.role-hierarchy-reference h4 {
-  color: #1e293b;
-  font-size: 14px;
-  margin: 0 0 18px;
-}
-
-.role-hierarchy-tree {
-  align-items: center;
-  display: flex;
-  flex-direction: column;
-  min-width: 760px;
-}
-
-.role-hierarchy-node {
-  background: #f8fafc;
-  border: 1px solid #dbe3ee;
-  border-radius: 6px;
-  color: #334155;
-  font-size: 12px;
-  font-weight: 700;
-  min-width: 150px;
-  padding: 8px 12px;
-  position: relative;
-  text-align: center;
-}
-
-.role-hierarchy-children {
-  align-items: center;
-  display: flex;
-  flex-direction: column;
-  padding-top: 28px;
-  position: relative;
-}
-
-.role-hierarchy-children::before {
-  background: #b8c2e8;
-  content: "";
-  height: 28px;
-  left: 50%;
-  position: absolute;
-  top: 0;
-  width: 1px;
-}
-
-.role-hierarchy-grid {
-  align-items: flex-start;
-  display: grid;
-  gap: 26px;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
-  padding-top: 36px;
-}
-
-.role-hierarchy-grid::after {
-  background: #b8c2e8;
-  content: "";
-  height: 1px;
-  left: 75px;
-  position: absolute;
-  right: 75px;
-  top: 28px;
-}
-
-.role-hierarchy-grid > .role-hierarchy-node::before,
-.role-hierarchy-grid > .role-hierarchy-branch::before {
-  background: #b8c2e8;
-  content: "";
-  height: 8px;
-  left: 50%;
-  position: absolute;
-  top: -8px;
-  width: 1px;
-}
-
-.role-hierarchy-branch {
-  position: relative;
 }
 
 /* Stats Cards enhancements in User Management */
