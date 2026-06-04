@@ -47,7 +47,8 @@ await store.createUser({
   name: "Cortexy Developer (Dev)",
   passwordHash: await bcrypt.hash("developer123", 12),
   role: "DEVELOPER",
-  accountId: null
+  accountId: null,
+  emailVerifiedAt: new Date().toISOString()
 });
 
 // 4. Seed Dashboard Records for Demo Account

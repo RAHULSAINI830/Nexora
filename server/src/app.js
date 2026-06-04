@@ -56,6 +56,8 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/auth/login", loginLimiter);
+app.use("/auth/verify-email", loginLimiter);
+app.use("/auth/resend-verification", loginLimiter);
 app.use("/auth", authRoutes);
 app.use("/accounts", accountRoutes);
 app.use("/dashboard", dashboardRoutes);

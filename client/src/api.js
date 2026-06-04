@@ -28,7 +28,11 @@ export async function apiRequest(path, options = {}) {
   const body = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(body.message ?? "Request failed");
+    const error = new Error(body.message ?? "Request failed");
+    error.code = body.code;
+    error.email = body.email;
+    error.status = response.status;
+    throw error;
   }
 
   return body;

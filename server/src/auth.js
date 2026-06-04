@@ -31,6 +31,8 @@ export async function requireAuth(req, res, next) {
     }
 
     delete user.passwordHash;
+    delete user.verificationCodeHash;
+    delete user.verificationCodeExpiresAt;
     req.user = user;
     next();
   } catch {

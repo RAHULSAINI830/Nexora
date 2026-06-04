@@ -217,6 +217,39 @@ button {
   margin: 0;
 }
 
+.form-notice {
+  color: #476075;
+  font-size: 13px;
+  margin: 0;
+}
+
+.verification-code-input {
+  font-size: 22px !important;
+  font-weight: 700;
+  text-align: center;
+}
+
+.verification-actions {
+  display: flex;
+  justify-content: space-between;
+}
+
+.verification-actions button {
+  background: transparent;
+  color: #0284c7;
+  font-size: 13px;
+  padding: 0;
+}
+
+.verification-actions button:hover {
+  color: #075985;
+}
+
+.verification-actions button:disabled {
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
 .btn-primary {
   background: #082f49;
   color: #ffffff;

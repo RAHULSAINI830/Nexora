@@ -1,7 +1,10 @@
 import bcrypt from "bcryptjs";
+import { createHmac, randomInt } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { store } from "../db.js";
+import { sendVerificationCode } from "../email.js";
+import { config } from "../config.js";
 import { requireAuth, requireRole, signToken } from "../auth.js";
 
 export const authRoutes = Router();
@@ -19,6 +22,25 @@ export const ROLE_LEVELS = {
 
 function canUseGlobalScope(user) {
   return user.role === "DEVELOPER" || user.role === "SUPER_ADMIN";
+}
+
+function safeUser(user) {
+  const { passwordHash, verificationCodeHash, verificationCodeExpiresAt, ...safe } = user;
+  return safe;
+}
+
+function hashVerificationCode(code) {
+  return createHmac("sha256", config.jwtSecret).update(code).digest("hex");
+}
+
+async function issueVerificationCode(user) {
+  const code = String(randomInt(100000, 1000000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  await store.setVerificationCode(user.id, {
+    codeHash: hashVerificationCode(code),
+    expiresAt
+  });
+  await sendVerificationCode({ email: user.email, name: user.name, code });
 }
 
 function canActOnRole(actorRole, targetRole) {
@@ -76,18 +98,71 @@ const loginSchema = z.object({
 
 authRoutes.post("/login", async (req, res) => {
   const body = loginSchema.parse(req.body);
-  const user = await store.findUserByEmail(body.email);
+  const user = await store.findUserByEmail(body.email.toLowerCase());
 
   if (!user || !(await bcrypt.compare(body.password, user.passwordHash))) {
     return res.status(401).json({ message: "Invalid email or password" });
   }
 
-  const { passwordHash, ...safeUser } = user;
+  if (!user.emailVerified) {
+    const codeExpired = !user.verificationCodeExpiresAt || new Date(user.verificationCodeExpiresAt) <= new Date();
+    if (codeExpired) {
+      await issueVerificationCode(user);
+    }
+    return res.status(403).json({
+      code: "EMAIL_VERIFICATION_REQUIRED",
+      message: "Verify your email before signing in",
+      email: user.email
+    });
+  }
 
   res.json({
     token: signToken(user),
-    user: safeUser
+    user: safeUser(user)
   });
+});
+
+const verificationSchema = z.object({
+  email: z.string().email(),
+  code: z.string().regex(/^\d{6}$/, "Enter the six-digit verification code")
+});
+
+authRoutes.post("/verify-email", async (req, res) => {
+  const body = verificationSchema.parse(req.body);
+  const user = await store.findUserByEmail(body.email.toLowerCase());
+
+  if (!user || user.emailVerified) {
+    return res.status(400).json({ message: "Verification code is invalid or no longer required" });
+  }
+
+  if (!user.verificationCodeHash || !user.verificationCodeExpiresAt || new Date(user.verificationCodeExpiresAt) <= new Date()) {
+    return res.status(400).json({ message: "Verification code has expired. Request a new code." });
+  }
+
+  if (hashVerificationCode(body.code) !== user.verificationCodeHash) {
+    return res.status(400).json({ message: "Verification code is incorrect" });
+  }
+
+  const verifiedUser = await store.markEmailVerified(user.id);
+  res.json({
+    token: signToken(verifiedUser),
+    user: safeUser(verifiedUser)
+  });
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().email()
+});
+
+authRoutes.post("/resend-verification", async (req, res) => {
+  const body = resendVerificationSchema.parse(req.body);
+  const user = await store.findUserByEmail(body.email.toLowerCase());
+
+  if (user && !user.emailVerified) {
+    await issueVerificationCode(user);
+  }
+
+  res.json({ message: "If the account requires verification, a new code has been sent." });
 });
 
 authRoutes.get("/me", requireAuth, (req, res) => {
@@ -137,8 +212,7 @@ authRoutes.patch("/me", requireAuth, async (req, res) => {
     passwordHash
   });
 
-  delete user.passwordHash;
-  res.json({ user });
+  res.json({ user: safeUser(user) });
 });
 
 authRoutes.get("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
@@ -263,7 +337,7 @@ authRoutes.post("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "
   const passwordHash = await bcrypt.hash(body.password, 12);
   const user = await store.createUser({
     id: body.id,
-    email: body.email,
+    email: body.email.toLowerCase(),
     name: body.name,
     passwordHash,
     role: body.role,
@@ -272,8 +346,21 @@ authRoutes.post("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "
     branchId
   });
 
-  delete user.passwordHash;
-  res.status(201).json({ user });
+  let emailDelivered = true;
+  try {
+    await issueVerificationCode(user);
+  } catch (error) {
+    emailDelivered = false;
+    console.error("Failed to send verification email", error);
+  }
+
+  res.status(201).json({
+    user: safeUser(user),
+    emailDelivered,
+    message: emailDelivered
+      ? "User created and verification code sent."
+      : "User created, but the verification email could not be sent. Use resend verification after email is configured."
+  });
 });
 
 const updateUserSchema = z.object({
@@ -349,7 +436,7 @@ authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPE
   }
 
   const user = await store.updateUser(targetUser.id, {
-    email: body.email,
+    email: body.email?.toLowerCase(),
     name: body.name,
     passwordHash,
     role: body.role,
@@ -358,8 +445,21 @@ authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPE
     branchId: body.branchId !== undefined ? body.branchId : undefined
   });
 
-  delete user.passwordHash;
-  res.json({ user });
+  let message = "User updated successfully.";
+  if (body.email && body.email.toLowerCase() !== targetUser.email.toLowerCase()) {
+    await store.clearEmailVerification(user.id);
+    const unverifiedUser = await store.findUserById(user.id);
+    try {
+      await issueVerificationCode(unverifiedUser);
+      message = "User updated. A verification code was sent to the new email address.";
+    } catch (error) {
+      console.error("Failed to send verification email", error);
+      message = "User updated, but the verification email could not be sent.";
+    }
+    return res.json({ user: safeUser(unverifiedUser), message });
+  }
+
+  res.json({ user: safeUser(user), message });
 });
 
 authRoutes.delete("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {

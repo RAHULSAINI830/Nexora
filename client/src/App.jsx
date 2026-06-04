@@ -34,6 +34,9 @@ function Login({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [verificationNotice, setVerificationNotice] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -49,6 +52,47 @@ function Login({ onLogin }) {
       });
       localStorage.setItem("cortexy_token", data.token);
       onLogin(data.user);
+    } catch (err) {
+      if (err.code === "EMAIL_VERIFICATION_REQUIRED") {
+        setVerificationEmail(err.email || email);
+        setVerificationNotice("Enter the six-digit code sent to your email.");
+        setError("");
+        return;
+      }
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerify(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      const data = await apiRequest("/auth/verify-email", {
+        method: "POST",
+        body: JSON.stringify({ email: verificationEmail, code: verificationCode })
+      });
+      localStorage.setItem("cortexy_token", data.token);
+      onLogin(data.user);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiRequest("/auth/resend-verification", {
+        method: "POST",
+        body: JSON.stringify({ email: verificationEmail })
+      });
+      setVerificationNotice(data.message);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -68,6 +112,41 @@ function Login({ onLogin }) {
             <h1>Log in to your account</h1>
             <p className="login-subtitle">Empower Your Business with AI Visibility</p>
 
+            {verificationEmail ? (
+              <form onSubmit={handleVerify} className="login-form">
+                <label>
+                  Verification code
+                  <input
+                    value={verificationCode}
+                    onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="000000"
+                    className="verification-code-input"
+                  />
+                </label>
+                {verificationNotice ? <p className="form-notice">{verificationNotice}</p> : null}
+                {error ? <p className="form-error">{error}</p> : null}
+                <button type="submit" disabled={loading || verificationCode.length !== 6} className="btn-primary">
+                  {loading ? "Verifying..." : "Verify email"}
+                </button>
+                <div className="verification-actions">
+                  <button type="button" onClick={handleResend} disabled={loading}>Resend code</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerificationEmail("");
+                      setVerificationCode("");
+                      setVerificationNotice("");
+                      setError("");
+                    }}
+                  >
+                    Back to login
+                  </button>
+                </div>
+              </form>
+            ) : (
             <form onSubmit={handleSubmit} className="login-form">
               <label>
                 Email
@@ -98,17 +177,18 @@ function Login({ onLogin }) {
                 {loading ? "Signing in..." : "Sign in"}
               </button>
             </form>
+            )}
 
-            <div className="login-divider">
+            {!verificationEmail ? <div className="login-divider">
               <span>Or continue with</span>
-            </div>
+            </div> : null}
 
-            <div className="social-logins">
+            {!verificationEmail ? <div className="social-logins">
               <button type="button" className="btn-social">
                 <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" width="18" height="18" />
                 Continue with Google
               </button>
-            </div>
+            </div> : null}
 
             <p className="login-footer-text" style={{ marginTop: '16px' }}>
               Don't have an account? <a href="#">Request access</a>
@@ -1285,7 +1365,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
           method: "POST",
           body: JSON.stringify(payload)
         });
-        setNotice(`${roleLabels[payload.role]} created successfully.`);
+        setNotice(data.message || `${roleLabels[payload.role]} created successfully.`);
         if (payload.role === "SUPER_ADMIN" && data.user?.accountId) {
           setSelectedAccountId(data.user.accountId);
           await loadIntegrations(data.user.accountId);

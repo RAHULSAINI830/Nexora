@@ -35,6 +35,8 @@ export const config = {
   tursoAuthToken: envValue("TURSO_AUTH_TOKEN"),
   externalApiUrl: envValue("EXTERNAL_API_URL"),
   externalApiKey: envValue("EXTERNAL_API_KEY"),
+  resendApiKey: envValue("RESEND_API_KEY"),
+  emailFrom: envValue("EMAIL_FROM", "Nexora <onboarding@resend.dev>"),
   bootstrapDeveloperEmail: envValue("BOOTSTRAP_DEVELOPER_EMAIL"),
   bootstrapDeveloperPassword: envValue("BOOTSTRAP_DEVELOPER_PASSWORD")
 };
