@@ -5,7 +5,7 @@ import { INTEGRATION_PLATFORMS, store } from "../db.js";
 
 export const accountRoutes = Router();
 
-accountRoutes.get("/", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"), async (_req, res) => {
+accountRoutes.get("/", requireAuth, requireRole("DEVELOPER"), async (_req, res) => {
   const accounts = await store.listAccounts();
 
   res.json({ accounts });
@@ -30,7 +30,7 @@ const createAccountSchema = z.object({
   branchName: z.string().optional()
 });
 
-accountRoutes.post("/", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"), async (req, res) => {
+accountRoutes.post("/", requireAuth, requireRole("DEVELOPER"), async (req, res) => {
   const { branchName, ...accountData } = createAccountSchema.parse(req.body);
   const account = await store.createAccount(accountData);
 
@@ -63,7 +63,7 @@ const updateAccountSchema = z.object({
 });
 
 accountRoutes.patch("/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
-  if (req.user.role !== "DEVELOPER" && req.user.role !== "SUPER_ADMIN" && req.user.accountId !== req.params.id) {
+  if (req.user.role !== "DEVELOPER" && req.user.accountId !== req.params.id) {
     return res.status(403).json({ message: "You can only update your own company information" });
   }
 
@@ -77,7 +77,7 @@ accountRoutes.patch("/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER",
   res.json({ account });
 });
 
-accountRoutes.delete("/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"), async (req, res) => {
+accountRoutes.delete("/:id", requireAuth, requireRole("DEVELOPER"), async (req, res) => {
   if (req.params.id === req.user.accountId) {
     return res.status(400).json({ message: "You cannot delete the company account you are currently logged into" });
   }
@@ -91,7 +91,7 @@ accountRoutes.delete("/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"
 });
 
 function canAccessAccount(req, accountId) {
-  if (req.user.role === "DEVELOPER" || req.user.role === "SUPER_ADMIN") {
+  if (req.user.role === "DEVELOPER") {
     return true;
   }
 

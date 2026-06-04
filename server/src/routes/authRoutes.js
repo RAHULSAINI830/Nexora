@@ -21,7 +21,7 @@ export const ROLE_LEVELS = {
 };
 
 function canUseGlobalScope(user) {
-  return user.role === "DEVELOPER" || user.role === "SUPER_ADMIN";
+  return user.role === "DEVELOPER";
 }
 
 function safeUser(user) {
@@ -53,7 +53,7 @@ function filterVisibleUsersForActor(actor, users) {
   }
 
   if (actor.role === "SUPER_ADMIN") {
-    return users.filter((u) => u.role !== "DEVELOPER");
+    return users.filter((u) => u.accountId === actor.accountId && canActOnRole(actor.role, u.role));
   }
 
   return users.filter((u) => u.accountId === actor.accountId && canActOnRole(actor.role, u.role));

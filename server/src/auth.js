@@ -51,7 +51,7 @@ export function requireRole(...roles) {
 }
 
 export function accountScopeFor(user, requestedAccountId) {
-  if (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") {
+  if (user.role === "DEVELOPER") {
     return requestedAccountId && requestedAccountId !== "all" ? { accountId: requestedAccountId } : {};
   }
 

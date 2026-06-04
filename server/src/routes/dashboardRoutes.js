@@ -38,7 +38,7 @@ dashboardRoutes.get("/records", requireAuth, async (req, res) => {
 
 dashboardRoutes.post("/sync", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
   const accountId =
-    req.user.role === "DEVELOPER" || req.user.role === "SUPER_ADMIN"
+    req.user.role === "DEVELOPER"
       ? req.body.accountId || req.user.accountId
       : req.user.accountId;
 

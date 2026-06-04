@@ -265,7 +265,7 @@ function RoleDashboard({ user, records, accounts, branches, onSync, selectedAcco
 
   const roleName = user.role;
 
-  if (roleName === "SUPER_ADMIN" || roleName === "DEVELOPER") {
+  if (roleName === "DEVELOPER") {
     return (
       <div className="role-dashboard super-admin-panel tab-transition">
         <div className="workspace-context-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px' }}>
@@ -544,7 +544,7 @@ function RoleDashboard({ user, records, accounts, branches, onSync, selectedAcco
     );
   }
 
-  if (roleName === "BUSINESS_OWNER") {
+  if (roleName === "SUPER_ADMIN" || roleName === "BUSINESS_OWNER") {
     return (
       <div className="role-dashboard business-owner-panel tab-transition">
         <h3 className="dashboard-section-title">Corporate Overview & Integrations</h3>
@@ -926,11 +926,11 @@ const integrationPlatforms = [
 
 function Dashboard({ user, onLogout, onUserUpdate }) {
   const [records, setRecords] = useState([]);
-  const [accounts, setAccounts] = useState([]);
+  const [accounts, setAccounts] = useState(() => user.role === "DEVELOPER" ? [] : user.account ? [user.account] : []);
   const [managedUsers, setManagedUsers] = useState([]);
   const [admins, setAdmins] = useState([]);
   const [branches, setBranches] = useState([]);
-  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [selectedAccountId, setSelectedAccountId] = useState(() => user.role === "DEVELOPER" ? "" : user.accountId ?? "");
   const [activeView, setActiveView] = useState(() => localStorage.getItem("cortexy_activeView") || "dashboard");
   const [settingsTab, setSettingsTab] = useState(() => {
     const saved = localStorage.getItem("cortexy_settingsTab");
@@ -975,7 +975,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   const [newCompLanguage, setNewCompLanguage] = useState("English");
   const [newCompCurrency, setNewCompCurrency] = useState("CAD");
   const [newCompBranchName, setNewCompBranchName] = useState("");
-  const [userMgmtCompanyFilter, setUserMgmtCompanyFilter] = useState(() => (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") ? "all" : "");
+  const [userMgmtCompanyFilter, setUserMgmtCompanyFilter] = useState(() => user.role === "DEVELOPER" ? "all" : user.accountId ?? "");
   const [userMgmtViewMode, setUserMgmtViewMode] = useState("tree");
 
   // Self update states
@@ -1009,7 +1009,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     sandbox: true
   });
 
-  const activeIntegrationAccountId = (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN")
+  const activeIntegrationAccountId = user.role === "DEVELOPER"
     ? selectedAccountId
     : user.accountId;
 
@@ -1150,7 +1150,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }, [user.name]);
 
   useEffect(() => {
-    const currentCompany = (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") 
+    const currentCompany = user.role === "DEVELOPER"
       ? accounts.find(a => a.id === selectedAccountId) 
       : user.account;
 
@@ -1191,7 +1191,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
       let updatedUser = data.user;
 
       // 2. Update company details if they are the owner/manager
-      const targetCompanyId = (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") 
+      const targetCompanyId = user.role === "DEVELOPER"
         ? selectedAccountId 
         : user.accountId;
 
@@ -1236,12 +1236,13 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }
 
   const canSync = user.role === "SUPER_ADMIN" || user.role === "DEVELOPER" || user.role === "BUSINESS_OWNER";
-  const canManageAccounts = user.role === "SUPER_ADMIN" || user.role === "DEVELOPER";
+  const canManageAccounts = user.role === "DEVELOPER";
   const canManageUsers = user.role === "SUPER_ADMIN" || user.role === "DEVELOPER" || user.role === "BUSINESS_OWNER";
 
   async function loadDashboard(accountId = selectedAccountId) {
     setLoading(true);
-    const query = accountId ? `?accountId=${accountId}` : "";
+    const targetId = user.role === "DEVELOPER" ? accountId : user.accountId;
+    const query = targetId ? `?accountId=${targetId}` : "";
     const data = await apiRequest(`/dashboard/records${query}`);
     setRecords(data.records);
     setLoading(false);
@@ -1250,7 +1251,9 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   async function loadUsers(accountId) {
     if (!canManageUsers) return;
     setUsersLoading(true);
-    const targetId = accountId !== undefined ? accountId : ((user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") ? userMgmtCompanyFilter : selectedAccountId);
+    const targetId = user.role === "DEVELOPER"
+      ? (accountId !== undefined ? accountId : userMgmtCompanyFilter)
+      : user.accountId;
     const query = targetId ? `?accountId=${targetId}` : "";
     const data = await apiRequest(`/auth/users${query}`);
     setManagedUsers(data.users);
@@ -1259,7 +1262,8 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
 
   async function loadAdmins(accountId = selectedAccountId) {
     if (!canManageUsers) return;
-    const query = accountId ? `?accountId=${accountId}` : "";
+    const targetId = user.role === "DEVELOPER" ? accountId : user.accountId;
+    const query = targetId ? `?accountId=${targetId}` : "";
     const data = await apiRequest(`/auth/admins${query}`);
     setAdmins(data.admins);
     setUserForm((current) => ({
@@ -1269,8 +1273,9 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }
 
   async function loadBranches(accountId = selectedAccountId || user.accountId) {
-    if (!accountId) return;
-    const query = `?accountId=${accountId}`;
+    const targetId = user.role === "DEVELOPER" ? accountId : user.accountId;
+    if (!targetId) return;
+    const query = `?accountId=${targetId}`;
     try {
       const data = await apiRequest(`/auth/branches${query}`);
       setBranches(data.branches || []);
@@ -1298,7 +1303,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
       await loadAccounts();
       await loadDashboard();
       if (canManageUsers) {
-        const initialCompanyFilter = (user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") ? "all" : selectedAccountId;
+        const initialCompanyFilter = user.role === "DEVELOPER" ? "all" : user.accountId;
         await loadUsers(initialCompanyFilter);
         await loadAdmins(initialCompanyFilter || selectedAccountId);
         await loadBranches(initialCompanyFilter || selectedAccountId || user.accountId);
@@ -1318,7 +1323,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
 
   async function handleSync() {
     setNotice("");
-    const body = (user.role === "SUPER_ADMIN" || user.role === "DEVELOPER") ? { accountId: selectedAccountId } : {};
+    const body = user.role === "DEVELOPER" ? { accountId: selectedAccountId } : {};
 
     try {
       const data = await apiRequest("/dashboard/sync", {
@@ -1352,7 +1357,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
         payload.companyName = userForm.companyName;
         payload.accountId = userForm.accountId;
       } else {
-        payload.accountId = (user.role === "SUPER_ADMIN" || user.role === "DEVELOPER") ? userForm.accountId : user.accountId;
+        payload.accountId = user.role === "DEVELOPER" ? userForm.accountId : user.accountId;
       }
 
       if (editingUserId) {
@@ -1651,7 +1656,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }
 
   const pageTitle = {
-    dashboard: (user.role === "SUPER_ADMIN" || user.role === "DEVELOPER") ? "All Accounts" : user.account?.name ?? "Assigned Account",
+    dashboard: user.role === "DEVELOPER" ? "All Accounts" : user.account?.name ?? "Assigned Account",
     data: "Stored API Data",
     settings: "Settings"
   }[activeView];
@@ -1764,7 +1769,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
             {settingsTab === "users" && canManageUsers ? (
               <div key="users-tab" className="premium-users-view tab-transition">
                 {/* Premium Developer User Management Stats Card Row */}
-                {(user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") && (
+                {user.role === "DEVELOPER" && (
                   <div className="role-grid" style={{ marginBottom: '20px' }}>
                     <div className="role-card" style={{ background: '#ffffff', border: '1px solid #e2e8f0', boxShadow: '0 4px 12px rgba(0, 0, 0, 0.02)' }}>
                       <div className="role-card-header">
@@ -1826,7 +1831,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                         ))}
                       </select>
 
-                      {(user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") && (
+                      {user.role === "DEVELOPER" && (
                         <select
                           value={userMgmtCompanyFilter}
                           onChange={(e) => {
@@ -1933,7 +1938,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                                 )}
                               </div>
                             </div>
-                            {(user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") && group.id !== "global" && group.id !== user.accountId && (
+                            {user.role === "DEVELOPER" && group.id !== "global" && group.id !== user.accountId && (
                               <button 
                                 className="btn-delete-company" 
                                 onClick={() => handleDeleteCompany(group.id, group.name)}
@@ -2111,7 +2116,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                       </label>
                       
                       {/* Company Selection Dropdown for Developer & Super Admin */}
-                      {(user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") ? (
+                      {user.role === "DEVELOPER" ? (
                         userForm.role === "SUPER_ADMIN" ? (
                           <label>
                             Company Name (Creates new company) *
@@ -2496,7 +2501,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                       Connect one or more platforms for the selected company. New companies start with all platforms available and disconnected.
                     </p>
                   </div>
-                  {(user.role === "DEVELOPER" || user.role === "SUPER_ADMIN") ? (
+                  {user.role === "DEVELOPER" ? (
                     <select
                       value={activeIntegrationAccountId || ""}
                       onChange={(event) => {
