@@ -1,9 +1,11 @@
+import "express-async-errors";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import { ZodError } from "zod";
 import { config } from "./config.js";
+import { initializeDatabase } from "./db.js";
 import { authRoutes } from "./routes/authRoutes.js";
 import { accountRoutes } from "./routes/accountRoutes.js";
 import { dashboardRoutes } from "./routes/dashboardRoutes.js";
@@ -48,8 +50,9 @@ const loginLimiter = rateLimit({
 
 app.use(express.json());
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
+app.get("/health", async (_req, res) => {
+  await initializeDatabase();
+  res.json({ ok: true, database: "connected" });
 });
 
 app.use("/auth/login", loginLimiter);
