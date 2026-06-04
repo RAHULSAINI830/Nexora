@@ -1,19 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import bcrypt from "bcryptjs";
+import { createClient } from "@libsql/client";
 import { config } from "./config.js";
 
-const databasePath = resolve(config.databaseFile);
-mkdirSync(dirname(databasePath), { recursive: true });
+if (Boolean(config.tursoDatabaseUrl) !== Boolean(config.tursoAuthToken)) {
+  throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be configured together");
+}
 
-export const db = new DatabaseSync(databasePath);
-db.exec("PRAGMA foreign_keys = ON");
+if (process.env.VERCEL && !config.tursoDatabaseUrl) {
+  throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required on Vercel");
+}
 
-// Standard Table Initialization
-db.exec(`
-  CREATE TABLE IF NOT EXISTS accounts (
+const localDatabasePath = resolve(config.databaseFile);
+if (!config.tursoDatabaseUrl) {
+  mkdirSync(dirname(localDatabasePath), { recursive: true });
+}
+
+export const db = createClient({
+  url: config.tursoDatabaseUrl || `file:${localDatabasePath}`,
+  authToken: config.tursoAuthToken || undefined
+});
+
+const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
@@ -32,24 +43,22 @@ db.exec(`
     currency TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS branches (
+  )`,
+  `CREATE TABLE IF NOT EXISTS branches (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS users (
+  )`,
+  `CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN (
-      'DEVELOPER', 'SUPER_ADMIN', 'BUSINESS_OWNER', 'MARKETING_MANAGER', 
+      'DEVELOPER', 'SUPER_ADMIN', 'BUSINESS_OWNER', 'MARKETING_MANAGER',
       'OPERATIONS_MANAGER', 'BRANCH_MANAGER', 'TECHNICIAN', 'ANALYST'
     )),
     account_id TEXT,
@@ -60,9 +69,8 @@ db.exec(`
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL,
     FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE SET NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS dashboard_records (
+  )`,
+  `CREATE TABLE IF NOT EXISTS dashboard_records (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
@@ -75,9 +83,8 @@ db.exec(`
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, source_id),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS account_integrations (
+  )`,
+  `CREATE TABLE IF NOT EXISTS account_integrations (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
     platform_key TEXT NOT NULL,
@@ -89,121 +96,31 @@ db.exec(`
     updated_at TEXT NOT NULL,
     UNIQUE (account_id, platform_key),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-  );
+  )`,
+  `CREATE INDEX IF NOT EXISTS dashboard_records_account_time_idx
+    ON dashboard_records(account_id, occurred_at)`
+];
 
-  CREATE INDEX IF NOT EXISTS dashboard_records_account_time_idx
-    ON dashboard_records(account_id, occurred_at);
-`);
+let initializationPromise;
 
-// Reset helper to reconstruct database with the new schema cleanly
-export function resetDatabase() {
-  db.exec("DROP TABLE IF EXISTS dashboard_records");
-  db.exec("DROP TABLE IF EXISTS account_integrations");
-  db.exec("DROP TABLE IF EXISTS users");
-  db.exec("DROP TABLE IF EXISTS branches");
-  db.exec("DROP TABLE IF EXISTS accounts");
-
-  db.exec(`
-    CREATE TABLE accounts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      tagline TEXT,
-      billing_address_line1 TEXT,
-      billing_address_line2 TEXT,
-      city TEXT,
-      state TEXT,
-      country TEXT,
-      zipcode TEXT,
-      administrator TEXT,
-      cellphone TEXT,
-      timezone TEXT,
-      locale TEXT,
-      language TEXT,
-      currency TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE branches (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role IN (
-        'DEVELOPER', 'SUPER_ADMIN', 'BUSINESS_OWNER', 'MARKETING_MANAGER', 
-        'OPERATIONS_MANAGER', 'BRANCH_MANAGER', 'TECHNICIAN', 'ANALYST'
-      )),
-      account_id TEXT,
-      admin_id TEXT,
-      branch_id TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL,
-      FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE dashboard_records (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      metric REAL NOT NULL,
-      status TEXT NOT NULL,
-      occurred_at TEXT NOT NULL,
-      raw TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (account_id, source_id),
-      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE account_integrations (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      platform_key TEXT NOT NULL,
-      platform_name TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('connected', 'disconnected')),
-      config TEXT NOT NULL,
-      connected_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (account_id, platform_key),
-      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX dashboard_records_account_time_idx
-      ON dashboard_records(account_id, occurred_at);
-  `);
+export function initializeDatabase() {
+  if (!initializationPromise) {
+    initializationPromise = db.batch(
+      ["PRAGMA foreign_keys = ON", ...schemaStatements].map((sql) => ({ sql, args: [] })),
+      "write"
+    ).then(() => bootstrapDeveloper());
+  }
+  return initializationPromise;
 }
 
-const integrationColumns = db.prepare("PRAGMA table_info(account_integrations)").all();
-if (!integrationColumns.length) {
-  db.exec(`
-    CREATE TABLE account_integrations (
-      id TEXT PRIMARY KEY,
-      account_id TEXT NOT NULL,
-      platform_key TEXT NOT NULL,
-      platform_name TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('connected', 'disconnected')),
-      config TEXT NOT NULL,
-      connected_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (account_id, platform_key),
-      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-    );
-  `);
+async function execute(sql, args = []) {
+  await initializeDatabase();
+  return db.execute({ sql, args });
+}
+
+async function first(sql, args = []) {
+  const result = await execute(sql, args);
+  return result.rows[0] ?? null;
 }
 
 function now() {
@@ -247,26 +164,9 @@ function mapUser(row) {
     branchId: row.branch_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    account: row.account_id
-      ? {
-          id: row.account_id,
-          name: row.account_name,
-          slug: row.account_slug
-        }
-      : null,
-    admin: row.admin_id
-      ? {
-          id: row.admin_id,
-          name: row.admin_name,
-          email: row.admin_email
-        }
-      : null,
-    branch: row.branch_id
-      ? {
-          id: row.branch_id,
-          name: row.branch_name
-        }
-      : null
+    account: row.account_id ? { id: row.account_id, name: row.account_name, slug: row.account_slug } : null,
+    admin: row.admin_id ? { id: row.admin_id, name: row.admin_name, email: row.admin_email } : null,
+    branch: row.branch_id ? { id: row.branch_id, name: row.branch_name } : null
   };
 }
 
@@ -288,20 +188,9 @@ function mapRecord(row) {
     raw: row.raw,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    account: {
-      id: row.account_id,
-      name: row.account_name,
-      slug: row.account_slug
-    }
+    account: { id: row.account_id, name: row.account_name, slug: row.account_slug }
   };
 }
-
-export const INTEGRATION_PLATFORMS = [
-  { key: "servicetitan", name: "ServiceTitan" },
-  { key: "housecall", name: "Housecall Pro" },
-  { key: "servicetrade", name: "ServiceTrade" },
-  { key: "jobber", name: "Jobber" }
-];
 
 function mapIntegration(row) {
   if (!row) return null;
@@ -311,7 +200,6 @@ function mapIntegration(row) {
   } catch {
     parsedConfig = {};
   }
-
   return {
     id: row.id,
     accountId: row.account_id,
@@ -325,417 +213,232 @@ function mapIntegration(row) {
   };
 }
 
+const userSelect = `
+  SELECT users.*, accounts.name AS account_name, accounts.slug AS account_slug,
+    admins.name AS admin_name, admins.email AS admin_email, branches.name AS branch_name
+  FROM users
+  LEFT JOIN accounts ON accounts.id = users.account_id
+  LEFT JOIN users admins ON admins.id = users.admin_id
+  LEFT JOIN branches ON branches.id = users.branch_id
+`;
+
+export const INTEGRATION_PLATFORMS = [
+  { key: "servicetitan", name: "ServiceTitan" },
+  { key: "housecall", name: "Housecall Pro" },
+  { key: "servicetrade", name: "ServiceTrade" },
+  { key: "jobber", name: "Jobber" }
+];
+
 export const store = {
-  upsertAccount({ id, name, slug }) {
-    if (id) {
-      const existing = this.findAccountById(id);
-      if (existing) return existing;
-    } else {
-      const existing = db.prepare("SELECT * FROM accounts WHERE slug = ?").get(slug);
-      if (existing) return mapAccount(existing);
-    }
-    return this.createAccount({ id, name, slug });
+  async upsertAccount({ id, name, slug }) {
+    const existing = id ? await this.findAccountById(id) : mapAccount(await first("SELECT * FROM accounts WHERE slug = ?", [slug]));
+    return existing || this.createAccount({ id, name, slug });
   },
 
-  createAccount(data) {
+  async createAccount(data) {
     const timestamp = now();
-    const finalId = data.id || randomUUID();
     const account = {
-      id: finalId,
-      name: data.name,
-      slug: data.slug,
-      tagline: data.tagline || "",
-      billing_address_line1: data.billingAddressLine1 || "",
-      billing_address_line2: data.billingAddressLine2 || "",
-      city: data.city || "",
-      state: data.state || "",
-      country: data.country || "",
-      zipcode: data.zipcode || "",
-      administrator: data.administrator || "",
-      cellphone: data.cellphone || "",
-      timezone: data.timezone || "UTC",
-      locale: data.locale || "en-US",
-      language: data.language || "English",
-      currency: data.currency || "USD",
-      created_at: timestamp,
-      updated_at: timestamp
+      id: data.id || randomUUID(), name: data.name, slug: data.slug, tagline: data.tagline || "",
+      billing_address_line1: data.billingAddressLine1 || "", billing_address_line2: data.billingAddressLine2 || "",
+      city: data.city || "", state: data.state || "", country: data.country || "", zipcode: data.zipcode || "",
+      administrator: data.administrator || "", cellphone: data.cellphone || "", timezone: data.timezone || "UTC",
+      locale: data.locale || "en-US", language: data.language || "English", currency: data.currency || "USD",
+      created_at: timestamp, updated_at: timestamp
     };
-    db.prepare(`
-      INSERT INTO accounts (
-        id, name, slug, tagline, billing_address_line1, billing_address_line2,
-        city, state, country, zipcode, administrator, cellphone, timezone, locale, language, currency,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      account.id, account.name, account.slug, account.tagline, account.billing_address_line1, account.billing_address_line2,
-      account.city, account.state, account.country, account.zipcode, account.administrator, account.cellphone,
-      account.timezone, account.locale, account.language, account.currency,
-      account.created_at, account.updated_at
+    await execute(
+      `INSERT INTO accounts (
+        id, name, slug, tagline, billing_address_line1, billing_address_line2, city, state, country, zipcode,
+        administrator, cellphone, timezone, locale, language, currency, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      Object.values(account)
     );
-    const createdAccount = mapAccount(account);
-    this.ensureDefaultIntegrations(createdAccount.id);
-    return createdAccount;
+    await this.ensureDefaultIntegrations(account.id);
+    return mapAccount(account);
   },
 
-  updateAccount(id, data) {
-    const timestamp = now();
-    const existing = this.findAccountById(id);
-    if (!existing) return null;
-
-    db.prepare(`
-      UPDATE accounts SET 
-        name = COALESCE(?, name),
-        slug = COALESCE(?, slug),
-        tagline = COALESCE(?, tagline),
-        billing_address_line1 = COALESCE(?, billing_address_line1),
-        billing_address_line2 = COALESCE(?, billing_address_line2),
-        city = COALESCE(?, city),
-        state = COALESCE(?, state),
-        country = COALESCE(?, country),
-        zipcode = COALESCE(?, zipcode),
-        administrator = COALESCE(?, administrator),
-        cellphone = COALESCE(?, cellphone),
-        timezone = COALESCE(?, timezone),
-        locale = COALESCE(?, locale),
-        language = COALESCE(?, language),
-        currency = COALESCE(?, currency),
-        updated_at = ?
-      WHERE id = ?
-    `).run(
-      data.name ?? null, 
-      data.slug ?? null, 
-      data.tagline ?? null,
-      data.billingAddressLine1 ?? null,
-      data.billingAddressLine2 ?? null,
-      data.city ?? null,
-      data.state ?? null,
-      data.country ?? null,
-      data.zipcode ?? null,
-      data.administrator ?? null,
-      data.cellphone ?? null,
-      data.timezone ?? null,
-      data.locale ?? null,
-      data.language ?? null,
-      data.currency ?? null,
-      timestamp, 
-      id
+  async updateAccount(id, data) {
+    if (!await this.findAccountById(id)) return null;
+    await execute(
+      `UPDATE accounts SET name = COALESCE(?, name), slug = COALESCE(?, slug), tagline = COALESCE(?, tagline),
+        billing_address_line1 = COALESCE(?, billing_address_line1), billing_address_line2 = COALESCE(?, billing_address_line2),
+        city = COALESCE(?, city), state = COALESCE(?, state), country = COALESCE(?, country), zipcode = COALESCE(?, zipcode),
+        administrator = COALESCE(?, administrator), cellphone = COALESCE(?, cellphone), timezone = COALESCE(?, timezone),
+        locale = COALESCE(?, locale), language = COALESCE(?, language), currency = COALESCE(?, currency), updated_at = ? WHERE id = ?`,
+      [data.name ?? null, data.slug ?? null, data.tagline ?? null, data.billingAddressLine1 ?? null,
+        data.billingAddressLine2 ?? null, data.city ?? null, data.state ?? null, data.country ?? null, data.zipcode ?? null,
+        data.administrator ?? null, data.cellphone ?? null, data.timezone ?? null, data.locale ?? null, data.language ?? null,
+        data.currency ?? null, now(), id]
     );
-
     return this.findAccountById(id);
   },
 
-  findAccountById(id) {
-    return mapAccount(db.prepare("SELECT * FROM accounts WHERE id = ?").get(id));
+  async findAccountById(id) {
+    return mapAccount(await first("SELECT * FROM accounts WHERE id = ?", [id]));
   },
 
-  listAccounts() {
-    return db
-      .prepare(`
-        SELECT
-          accounts.*,
-          COUNT(DISTINCT users.id) AS users_count,
-          COUNT(DISTINCT dashboard_records.id) AS records_count
-        FROM accounts
-        LEFT JOIN users ON users.account_id = accounts.id
-        LEFT JOIN dashboard_records ON dashboard_records.account_id = accounts.id
-        GROUP BY accounts.id
-        ORDER BY accounts.created_at DESC
-      `)
-      .all()
-      .map((row) => ({
-        ...mapAccount(row),
-        _count: {
-          users: row.users_count,
-          records: row.records_count
-        }
-      }));
+  async listAccounts() {
+    const result = await execute(`SELECT accounts.*, COUNT(DISTINCT users.id) AS users_count,
+      COUNT(DISTINCT dashboard_records.id) AS records_count FROM accounts
+      LEFT JOIN users ON users.account_id = accounts.id
+      LEFT JOIN dashboard_records ON dashboard_records.account_id = accounts.id
+      GROUP BY accounts.id ORDER BY accounts.created_at DESC`);
+    return result.rows.map((row) => ({ ...mapAccount(row), _count: { users: row.users_count, records: row.records_count } }));
   },
 
-  countUsers() {
-    return db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
+  async countUsers() {
+    return Number((await first("SELECT COUNT(*) AS count FROM users")).count);
   },
 
-  findUserByEmail(email) {
-    return mapUser(
-      db
-        .prepare(`
-          SELECT
-            users.*,
-            accounts.name AS account_name,
-            accounts.slug AS account_slug,
-            admins.name AS admin_name,
-            admins.email AS admin_email,
-            branches.name AS branch_name
-          FROM users
-          LEFT JOIN accounts ON accounts.id = users.account_id
-          LEFT JOIN users admins ON admins.id = users.admin_id
-          LEFT JOIN branches ON branches.id = users.branch_id
-          WHERE users.email = ?
-        `)
-        .get(email)
-    );
+  async findUserByEmail(email) {
+    return mapUser(await first(`${userSelect} WHERE users.email = ?`, [email]));
   },
 
-  findUserById(id) {
-    return mapUser(
-      db
-        .prepare(`
-          SELECT
-            users.*,
-            accounts.name AS account_name,
-            accounts.slug AS account_slug,
-            admins.name AS admin_name,
-            admins.email AS admin_email,
-            branches.name AS branch_name
-          FROM users
-          LEFT JOIN accounts ON accounts.id = users.account_id
-          LEFT JOIN users admins ON admins.id = users.admin_id
-          LEFT JOIN branches ON branches.id = users.branch_id
-          WHERE users.id = ?
-        `)
-        .get(id)
-    );
+  async findUserById(id) {
+    return mapUser(await first(`${userSelect} WHERE users.id = ?`, [id]));
   },
 
-  upsertUser({ email, name, passwordHash, role, accountId = null, adminId = null, branchId = null }) {
-    const existing = this.findUserByEmail(email);
-    if (existing) return existing;
-    return this.createUser({ email, name, passwordHash, role, accountId, adminId, branchId });
+  async upsertUser(data) {
+    return (await this.findUserByEmail(data.email)) || this.createUser(data);
   },
 
-  createUser({ id, email, name, passwordHash, role, accountId = null, adminId = null, branchId = null }) {
+  async createUser({ id, email, name, passwordHash, role, accountId = null, adminId = null, branchId = null }) {
     const timestamp = now();
     const finalId = id || randomUUID();
-    db.prepare(`
-      INSERT INTO users (id, email, name, password_hash, role, account_id, admin_id, branch_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(finalId, email, name, passwordHash, role, accountId, adminId, branchId, timestamp, timestamp);
+    await execute(`INSERT INTO users (id, email, name, password_hash, role, account_id, admin_id, branch_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [finalId, email, name, passwordHash, role, accountId, adminId, branchId, timestamp, timestamp]);
     return this.findUserById(finalId);
   },
 
-  updateUser(id, { email, name, passwordHash, role, accountId, adminId, branchId }) {
-    const timestamp = now();
-    const existing = this.findUserById(id);
-    if (!existing) return null;
-
-    db.prepare(`
-      UPDATE users SET 
-        email = COALESCE(?, email),
-        name = COALESCE(?, name),
-        password_hash = COALESCE(?, password_hash),
-        role = COALESCE(?, role),
-        account_id = COALESCE(?, account_id),
-        admin_id = COALESCE(?, admin_id),
-        branch_id = COALESCE(?, branch_id),
-        updated_at = ?
-      WHERE id = ?
-    `).run(
-      email ?? null, 
-      name ?? null, 
-      passwordHash ?? null, 
-      role ?? null, 
-      accountId !== undefined ? accountId : null, 
-      adminId !== undefined ? adminId : null, 
-      branchId !== undefined ? branchId : null, 
-      timestamp, 
-      id
-    );
+  async updateUser(id, { email, name, passwordHash, role, accountId, adminId, branchId }) {
+    if (!await this.findUserById(id)) return null;
+    await execute(`UPDATE users SET email = COALESCE(?, email), name = COALESCE(?, name), password_hash = COALESCE(?, password_hash),
+      role = COALESCE(?, role), account_id = COALESCE(?, account_id), admin_id = COALESCE(?, admin_id),
+      branch_id = COALESCE(?, branch_id), updated_at = ? WHERE id = ?`,
+    [email ?? null, name ?? null, passwordHash ?? null, role ?? null, accountId !== undefined ? accountId : null,
+      adminId !== undefined ? adminId : null, branchId !== undefined ? branchId : null, now(), id]);
     return this.findUserById(id);
   },
 
-  listUsers({ accountId, adminId, role, branchId } = {}) {
-    const baseQuery = `
-      SELECT
-        users.*,
-        accounts.name AS account_name,
-        accounts.slug AS account_slug,
-        admins.name AS admin_name,
-        admins.email AS admin_email,
-        branches.name AS branch_name
-      FROM users
-      LEFT JOIN accounts ON accounts.id = users.account_id
-      LEFT JOIN users admins ON admins.id = users.admin_id
-      LEFT JOIN branches ON branches.id = users.branch_id
-    `;
+  async listUsers({ accountId, adminId, role, branchId } = {}) {
     const filters = [];
-    const params = [];
-
-    if (accountId) {
-      filters.push("users.account_id = ?");
-      params.push(accountId);
+    const args = [];
+    for (const [column, value] of [["account_id", accountId], ["admin_id", adminId], ["role", role], ["branch_id", branchId]]) {
+      if (value) {
+        filters.push(`users.${column} = ?`);
+        args.push(value);
+      }
     }
-
-    if (adminId) {
-      filters.push("users.admin_id = ?");
-      params.push(adminId);
-    }
-
-    if (role) {
-      filters.push("users.role = ?");
-      params.push(role);
-    }
-
-    if (branchId) {
-      filters.push("users.branch_id = ?");
-      params.push(branchId);
-    }
-
     const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
-    const rows = db.prepare(`${baseQuery}${where} ORDER BY users.created_at DESC`).all(...params);
-
-    return rows.map(mapUser).map(publicUser);
+    const result = await execute(`${userSelect}${where} ORDER BY users.created_at DESC`, args);
+    return result.rows.map(mapUser).map(publicUser);
   },
 
-  listAdmins({ accountId } = {}) {
-    return this.listUsers({ accountId, role: "BUSINESS_OWNER" }); // Business Owner acts as ADMIN in user terms
+  async listAdmins({ accountId } = {}) {
+    return this.listUsers({ accountId, role: "BUSINESS_OWNER" });
   },
 
-  deleteUser(id) {
-    const result = db.prepare("DELETE FROM users WHERE id = ?").run(id);
-    return result.changes > 0;
+  async deleteUser(id) {
+    return (await execute("DELETE FROM users WHERE id = ?", [id])).rowsAffected > 0;
   },
 
-  deleteAccount(id) {
-    db.prepare("DELETE FROM users WHERE account_id = ?").run(id);
-    const result = db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
-    return result.changes > 0;
+  async deleteAccount(id) {
+    await execute("DELETE FROM users WHERE account_id = ?", [id]);
+    return (await execute("DELETE FROM accounts WHERE id = ?", [id])).rowsAffected > 0;
   },
 
-  createBranch({ id, name, accountId }) {
+  async createBranch({ id, name, accountId }) {
     const timestamp = now();
     const finalId = id || randomUUID();
-    db.prepare("INSERT INTO branches (id, name, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-      .run(finalId, name, accountId, timestamp, timestamp);
+    await execute("INSERT INTO branches (id, name, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      [finalId, name, accountId, timestamp, timestamp]);
     return { id: finalId, name, accountId };
   },
 
-  listBranches(accountId) {
-    if (accountId) {
-      return db.prepare("SELECT * FROM branches WHERE account_id = ? ORDER BY name ASC").all(accountId);
-    }
-    return db.prepare("SELECT * FROM branches ORDER BY name ASC").all();
+  async listBranches(accountId) {
+    const result = accountId
+      ? await execute("SELECT * FROM branches WHERE account_id = ? ORDER BY name ASC", [accountId])
+      : await execute("SELECT * FROM branches ORDER BY name ASC");
+    return result.rows;
   },
 
-  findBranchById(id) {
-    return db.prepare("SELECT * FROM branches WHERE id = ?").get(id);
+  async findBranchById(id) {
+    return first("SELECT * FROM branches WHERE id = ?", [id]);
   },
 
-  ensureDefaultIntegrations(accountId) {
+  async ensureDefaultIntegrations(accountId) {
     if (!accountId) return;
+    await initializeDatabase();
     const timestamp = now();
-    const statement = db.prepare(`
-      INSERT INTO account_integrations (
+    await db.batch(INTEGRATION_PLATFORMS.map((platform) => ({
+      sql: `INSERT INTO account_integrations (
         id, account_id, platform_key, platform_name, status, config, connected_at, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, 'disconnected', '{}', NULL, ?, ?)
-      ON CONFLICT(account_id, platform_key) DO NOTHING
-    `);
-
-    for (const platform of INTEGRATION_PLATFORMS) {
-      statement.run(randomUUID(), accountId, platform.key, platform.name, timestamp, timestamp);
-    }
+      ) VALUES (?, ?, ?, ?, 'disconnected', '{}', NULL, ?, ?) ON CONFLICT(account_id, platform_key) DO NOTHING`,
+      args: [randomUUID(), accountId, platform.key, platform.name, timestamp, timestamp]
+    })), "write");
   },
 
-  listAccountIntegrations(accountId) {
-    this.ensureDefaultIntegrations(accountId);
-    return db
-      .prepare("SELECT * FROM account_integrations WHERE account_id = ? ORDER BY platform_name ASC")
-      .all(accountId)
-      .map(mapIntegration);
+  async listAccountIntegrations(accountId) {
+    await this.ensureDefaultIntegrations(accountId);
+    const result = await execute("SELECT * FROM account_integrations WHERE account_id = ? ORDER BY platform_name ASC", [accountId]);
+    return result.rows.map(mapIntegration);
   },
 
-  setAccountIntegration(accountId, platformKey, { status, config = {} }) {
-    const platform = INTEGRATION_PLATFORMS.find((item) => item.key === platformKey);
-    if (!platform) return null;
-
-    this.ensureDefaultIntegrations(accountId);
+  async setAccountIntegration(accountId, platformKey, { status, config: integrationConfig = {} }) {
+    if (!INTEGRATION_PLATFORMS.some((item) => item.key === platformKey)) return null;
+    await this.ensureDefaultIntegrations(accountId);
     const timestamp = now();
-    const connectedAt = status === "connected" ? timestamp : null;
-    db.prepare(`
-      UPDATE account_integrations SET
-        status = ?,
-        config = ?,
-        connected_at = ?,
-        updated_at = ?
-      WHERE account_id = ? AND platform_key = ?
-    `).run(status, JSON.stringify(config), connectedAt, timestamp, accountId, platformKey);
-
-    return mapIntegration(
-      db.prepare("SELECT * FROM account_integrations WHERE account_id = ? AND platform_key = ?").get(accountId, platformKey)
-    );
+    await execute(`UPDATE account_integrations SET status = ?, config = ?, connected_at = ?, updated_at = ?
+      WHERE account_id = ? AND platform_key = ?`,
+    [status, JSON.stringify(integrationConfig), status === "connected" ? timestamp : null, timestamp, accountId, platformKey]);
+    return mapIntegration(await first("SELECT * FROM account_integrations WHERE account_id = ? AND platform_key = ?", [accountId, platformKey]));
   },
 
-  listDashboardRecords({ accountId, branchId } = {}) {
-    const baseQuery = `
-      SELECT dashboard_records.*, accounts.name AS account_name, accounts.slug AS account_slug
-      FROM dashboard_records
-      JOIN accounts ON accounts.id = dashboard_records.account_id
-    `;
-    
-    // In our simplified layout, records are linked to accounts, but we can filter dashboard queries or display based on role scope.
-    // If a branchId is specified, we filter by branch (which can map to specific records if we want, or mock it).
-    // Let's allow accountId filtering.
-    const filters = [];
-    const params = [];
-    
-    if (accountId) {
-      filters.push("dashboard_records.account_id = ?");
-      params.push(accountId);
-    }
-    
-    const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
-    const rows = db.prepare(`${baseQuery}${where} ORDER BY occurred_at DESC LIMIT 100`).all(...params);
-
-    return rows.map(mapRecord);
+  async listDashboardRecords({ accountId } = {}) {
+    const where = accountId ? " WHERE dashboard_records.account_id = ?" : "";
+    const result = await execute(`SELECT dashboard_records.*, accounts.name AS account_name, accounts.slug AS account_slug
+      FROM dashboard_records JOIN accounts ON accounts.id = dashboard_records.account_id${where}
+      ORDER BY occurred_at DESC LIMIT 100`, accountId ? [accountId] : []);
+    return result.rows.map(mapRecord);
   },
 
-  upsertDashboardRecords(accountId, records) {
-    const statement = db.prepare(`
-      INSERT INTO dashboard_records (
-        id, account_id, source_id, title, metric, status, occurred_at, raw, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(account_id, source_id) DO UPDATE SET
-        title = excluded.title,
-        metric = excluded.metric,
-        status = excluded.status,
-        occurred_at = excluded.occurred_at,
-        raw = excluded.raw,
-        updated_at = excluded.updated_at
-    `);
-
-    try {
-      db.exec("BEGIN");
-      for (const record of records) {
-        const timestamp = now();
-        statement.run(
-          randomUUID(),
-          accountId,
-          record.sourceId,
-          record.title,
-          record.metric,
-          record.status,
-          new Date(record.occurredAt).toISOString(),
-          JSON.stringify(record.raw ?? record),
-          timestamp,
-          timestamp
-        );
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-
+  async upsertDashboardRecords(accountId, records) {
+    await initializeDatabase();
+    await db.batch(records.map((record) => {
+      const timestamp = now();
+      return {
+        sql: `INSERT INTO dashboard_records (
+          id, account_id, source_id, title, metric, status, occurred_at, raw, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(account_id, source_id) DO UPDATE SET title = excluded.title, metric = excluded.metric,
+          status = excluded.status, occurred_at = excluded.occurred_at, raw = excluded.raw, updated_at = excluded.updated_at`,
+        args: [randomUUID(), accountId, record.sourceId, record.title, record.metric, record.status,
+          new Date(record.occurredAt).toISOString(), JSON.stringify(record.raw ?? record), timestamp, timestamp]
+      };
+    }), "write");
     return records.length;
   }
 };
 
-if (config.bootstrapDeveloperEmail && config.bootstrapDeveloperPassword && store.countUsers() === 0) {
-  store.createUser({
-    email: config.bootstrapDeveloperEmail,
-    name: "Cortexy Developer",
-    passwordHash: bcrypt.hashSync(config.bootstrapDeveloperPassword, 12),
-    role: "DEVELOPER"
+export async function resetDatabase() {
+  await initializeDatabase();
+  await db.batch([
+    "DROP TABLE IF EXISTS dashboard_records", "DROP TABLE IF EXISTS account_integrations", "DROP TABLE IF EXISTS users",
+    "DROP TABLE IF EXISTS branches", "DROP TABLE IF EXISTS accounts"
+  ].map((sql) => ({ sql, args: [] })), "write");
+  initializationPromise = db.batch(schemaStatements.map((sql) => ({ sql, args: [] })), "write");
+  await initializationPromise;
+}
+
+async function bootstrapDeveloper() {
+  if (!config.bootstrapDeveloperEmail || !config.bootstrapDeveloperPassword) return;
+  const result = await db.execute("SELECT COUNT(*) AS count FROM users");
+  if (Number(result.rows[0].count) !== 0) return;
+  const timestamp = now();
+  await db.execute({
+    sql: `INSERT INTO users (id, email, name, password_hash, role, account_id, admin_id, branch_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'DEVELOPER', NULL, NULL, NULL, ?, ?)`,
+    args: [randomUUID(), config.bootstrapDeveloperEmail, "Cortexy Developer",
+      bcrypt.hashSync(config.bootstrapDeveloperPassword, 12), timestamp, timestamp]
   });
 }

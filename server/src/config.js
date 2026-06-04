@@ -16,6 +16,8 @@ export const config = {
     .filter(Boolean)
     .concat(deploymentOrigins),
   databaseFile: process.env.DATABASE_FILE ?? (process.env.VERCEL ? "/tmp/cortexy.db" : "./data/cortexy.db"),
+  tursoDatabaseUrl: process.env.TURSO_DATABASE_URL ?? "",
+  tursoAuthToken: process.env.TURSO_AUTH_TOKEN ?? "",
   externalApiUrl: process.env.EXTERNAL_API_URL ?? "",
   externalApiKey: process.env.EXTERNAL_API_KEY ?? "",
   bootstrapDeveloperEmail: process.env.BOOTSTRAP_DEVELOPER_EMAIL ?? "",

@@ -24,7 +24,7 @@ export async function requireAuth(req, res, next) {
 
   try {
     const payload = jwt.verify(token, config.jwtSecret, { algorithms: ["HS256"] });
-    const user = store.findUserById(payload.sub);
+    const user = await store.findUserById(payload.sub);
 
     if (!user) {
       return res.status(401).json({ message: "User no longer exists" });

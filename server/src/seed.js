@@ -3,11 +3,11 @@ import { store, resetDatabase } from "./db.js";
 
 // Reset tables to clear old schema constraints and build fresh
 console.log("Resetting database schema...");
-resetDatabase();
+await resetDatabase();
 
 // 1. Seed Accounts
 console.log("Seeding accounts...");
-const demoAccount = store.createAccount({
+const demoAccount = await store.createAccount({
   name: "Stott Electrical Solutions",
   slug: "stott-electrical",
   tagline: "Expert Electrical Contracting Services",
@@ -28,12 +28,12 @@ const demoAccount = store.createAccount({
 
 // 2. Seed Branches for Demo Account
 console.log("Seeding branches...");
-const northBranch = store.createBranch({
+const northBranch = await store.createBranch({
   name: "North Branch (NYC)",
   accountId: demoAccount.id
 });
 
-const southBranch = store.createBranch({
+const southBranch = await store.createBranch({
   name: "South Branch (Miami)",
   accountId: demoAccount.id
 });
@@ -42,7 +42,7 @@ const southBranch = store.createBranch({
 console.log("Seeding users...");
 
 // DEVELOPER (System Developer)
-store.createUser({
+await store.createUser({
   email: "developer@cortexy.local",
   name: "Cortexy Developer (Dev)",
   passwordHash: await bcrypt.hash("developer123", 12),
@@ -52,7 +52,7 @@ store.createUser({
 
 // 4. Seed Dashboard Records for Demo Account
 console.log("Seeding dashboard records...");
-store.upsertDashboardRecords(demoAccount.id, [
+await store.upsertDashboardRecords(demoAccount.id, [
   {
     sourceId: "report-crm-sync",
     title: "HubSpot CRM Integration",

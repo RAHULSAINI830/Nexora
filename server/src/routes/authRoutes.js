@@ -45,11 +45,11 @@ function resolveAccountIdForActor(actor, requestedAccountId) {
   return actor.accountId;
 }
 
-function validateAccountBoundReference({ res, accountId, referenceId, type, targetRole }) {
+async function validateAccountBoundReference({ res, accountId, referenceId, type, targetRole }) {
   if (!referenceId) return true;
 
   if (type === "manager") {
-    const manager = store.findUserById(referenceId);
+    const manager = await store.findUserById(referenceId);
     if (!manager || manager.accountId !== accountId || !canActOnRole(manager.role, targetRole)) {
       res.status(400).json({ message: "Reporting manager must be in the same company and above the target role" });
       return false;
@@ -58,7 +58,7 @@ function validateAccountBoundReference({ res, accountId, referenceId, type, targ
   }
 
   if (type === "branch") {
-    const branch = store.findBranchById(referenceId);
+    const branch = await store.findBranchById(referenceId);
     if (!branch || branch.account_id !== accountId) {
       res.status(400).json({ message: "Branch must belong to the same company as the user" });
       return false;
@@ -76,7 +76,7 @@ const loginSchema = z.object({
 
 authRoutes.post("/login", async (req, res) => {
   const body = loginSchema.parse(req.body);
-  const user = store.findUserByEmail(body.email);
+  const user = await store.findUserByEmail(body.email);
 
   if (!user || !(await bcrypt.compare(body.password, user.passwordHash))) {
     return res.status(401).json({ message: "Invalid email or password" });
@@ -132,7 +132,7 @@ authRoutes.patch("/me", requireAuth, async (req, res) => {
     passwordHash = await bcrypt.hash(body.password, 12);
   }
 
-  const user = store.updateUser(req.user.id, {
+  const user = await store.updateUser(req.user.id, {
     name: body.name,
     passwordHash
   });
@@ -141,7 +141,7 @@ authRoutes.patch("/me", requireAuth, async (req, res) => {
   res.json({ user });
 });
 
-authRoutes.get("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), (req, res) => {
+authRoutes.get("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
   let accountId = undefined;
   
   if (canUseGlobalScope(req.user)) {
@@ -156,16 +156,15 @@ authRoutes.get("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "B
     accountId = req.user.accountId;
   }
 
-  const users = filterVisibleUsersForActor(req.user, store.listUsers({ accountId }));
+  const users = filterVisibleUsersForActor(req.user, await store.listUsers({ accountId }));
   res.json({ users });
 });
 
-authRoutes.get("/admins", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), (req, res) => {
+authRoutes.get("/admins", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
   const accountId = canUseGlobalScope(req.user)
     ? (req.query.accountId || req.user.accountId) 
     : req.user.accountId;
-  const potentialManagers = store
-    .listUsers({ accountId })
+  const potentialManagers = (await store.listUsers({ accountId }))
     .filter((u) => ["BUSINESS_OWNER", "BRANCH_MANAGER"].includes(u.role));
   const admins = req.user.role === "BUSINESS_OWNER"
     ? potentialManagers.filter((u) => u.id === req.user.id || canActOnRole(req.user.role, u.role))
@@ -174,14 +173,14 @@ authRoutes.get("/admins", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "
   res.json({ admins });
 });
 
-authRoutes.get("/branches", requireAuth, (req, res) => {
+authRoutes.get("/branches", requireAuth, async (req, res) => {
   const accountId = canUseGlobalScope(req.user)
     ? (req.query.accountId || req.user.accountId) 
     : req.user.accountId;
   if (!accountId) {
     return res.json({ branches: [] });
   }
-  const branches = store.listBranches(accountId);
+  const branches = await store.listBranches(accountId);
   res.json({ branches });
 });
 
@@ -222,9 +221,9 @@ authRoutes.post("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "
       return res.status(400).json({ message: "Company name is required when creating a Super Admin" });
     }
     const slug = body.companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-    let existingAccount = store.listAccounts().find(a => a.slug === slug);
+    let existingAccount = (await store.listAccounts()).find(a => a.slug === slug);
     if (!existingAccount) {
-      existingAccount = store.createAccount({
+      existingAccount = await store.createAccount({
         name: body.companyName.trim(),
         slug,
         billingAddressLine1: "123 Main St",
@@ -241,7 +240,7 @@ authRoutes.post("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "
     if (!accountId) {
       return res.status(400).json({ message: "accountId is required for company users" });
     }
-    if (!store.findAccountById(accountId)) {
+    if (!await store.findAccountById(accountId)) {
       return res.status(404).json({ message: "Company not found" });
     }
   }
@@ -253,16 +252,16 @@ authRoutes.post("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "
     adminId = req.user.id;
   }
 
-  if (!validateAccountBoundReference({ res, accountId, referenceId: adminId, type: "manager", targetRole: body.role })) {
+  if (!await validateAccountBoundReference({ res, accountId, referenceId: adminId, type: "manager", targetRole: body.role })) {
     return;
   }
 
-  if (!validateAccountBoundReference({ res, accountId, referenceId: branchId, type: "branch", targetRole: body.role })) {
+  if (!await validateAccountBoundReference({ res, accountId, referenceId: branchId, type: "branch", targetRole: body.role })) {
     return;
   }
 
   const passwordHash = await bcrypt.hash(body.password, 12);
-  const user = store.createUser({
+  const user = await store.createUser({
     id: body.id,
     email: body.email,
     name: body.name,
@@ -292,7 +291,7 @@ const updateUserSchema = z.object({
 });
 
 authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
-  const targetUser = store.findUserById(req.params.id);
+  const targetUser = await store.findUserById(req.params.id);
   if (!targetUser || (targetUser.role === "DEVELOPER" && req.user.role !== "DEVELOPER")) {
     return res.status(404).json({ message: "User not found" });
   }
@@ -317,7 +316,7 @@ authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPE
   }
 
   if (targetUser.role === "SUPER_ADMIN" && body.companyName && body.companyName.trim()) {
-    store.updateAccount(targetUser.accountId, { name: body.companyName.trim() });
+    await store.updateAccount(targetUser.accountId, { name: body.companyName.trim() });
   }
   
   // Enforce role hierarchy: modifier's role level must be strictly higher than the new role level being assigned.
@@ -332,15 +331,15 @@ authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPE
     return res.status(400).json({ message: "accountId is required for company users" });
   }
 
-  if (nextAccountId && !store.findAccountById(nextAccountId)) {
+  if (nextAccountId && !await store.findAccountById(nextAccountId)) {
     return res.status(404).json({ message: "Company not found" });
   }
 
-  if (!validateAccountBoundReference({ res, accountId: nextAccountId, referenceId: body.adminId, type: "manager", targetRole: nextRole })) {
+  if (!await validateAccountBoundReference({ res, accountId: nextAccountId, referenceId: body.adminId, type: "manager", targetRole: nextRole })) {
     return;
   }
 
-  if (!validateAccountBoundReference({ res, accountId: nextAccountId, referenceId: body.branchId, type: "branch", targetRole: nextRole })) {
+  if (!await validateAccountBoundReference({ res, accountId: nextAccountId, referenceId: body.branchId, type: "branch", targetRole: nextRole })) {
     return;
   }
 
@@ -349,7 +348,7 @@ authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPE
     passwordHash = await bcrypt.hash(body.password, 12);
   }
 
-  const user = store.updateUser(targetUser.id, {
+  const user = await store.updateUser(targetUser.id, {
     email: body.email,
     name: body.name,
     passwordHash,
@@ -363,8 +362,8 @@ authRoutes.patch("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPE
   res.json({ user });
 });
 
-authRoutes.delete("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), (req, res) => {
-  const targetUser = store.findUserById(req.params.id);
+authRoutes.delete("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
+  const targetUser = await store.findUserById(req.params.id);
 
   if (!targetUser || (targetUser.role === "DEVELOPER" && req.user.role !== "DEVELOPER")) {
     return res.status(404).json({ message: "User not found" });
@@ -383,6 +382,6 @@ authRoutes.delete("/users/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOP
     return res.status(403).json({ message: "You can only delete users within your own company" });
   }
 
-  store.deleteUser(targetUser.id);
+  await store.deleteUser(targetUser.id);
   res.json({ deleted: true });
 });

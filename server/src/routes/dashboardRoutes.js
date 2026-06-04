@@ -7,11 +7,11 @@ export const dashboardRoutes = Router();
 
 dashboardRoutes.get("/records", requireAuth, async (req, res) => {
   const scope = accountScopeFor(req.user, req.query.accountId);
-  let records = store.listDashboardRecords(scope);
+  let records = await store.listDashboardRecords(scope);
 
   // Apply role-based record scoping dynamically
   if (req.user.role === "BRANCH_MANAGER" && req.user.branchId) {
-    const branch = store.findBranchById(req.user.branchId);
+    const branch = await store.findBranchById(req.user.branchId);
     if (branch) {
       const branchKeyword = branch.name.split(" ")[0].toLowerCase(); // e.g. "north"
       records = records.filter((r) => {
@@ -48,7 +48,7 @@ dashboardRoutes.post("/sync", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER
 
   try {
     const sourceRecords = await fetchExternalDashboardData({ accountId });
-    const synced = store.upsertDashboardRecords(accountId, sourceRecords);
+    const synced = await store.upsertDashboardRecords(accountId, sourceRecords);
 
     res.json({ synced });
   } catch (error) {

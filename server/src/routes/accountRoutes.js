@@ -6,7 +6,7 @@ import { INTEGRATION_PLATFORMS, store } from "../db.js";
 export const accountRoutes = Router();
 
 accountRoutes.get("/", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"), async (_req, res) => {
-  const accounts = store.listAccounts();
+  const accounts = await store.listAccounts();
 
   res.json({ accounts });
 });
@@ -32,10 +32,10 @@ const createAccountSchema = z.object({
 
 accountRoutes.post("/", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"), async (req, res) => {
   const { branchName, ...accountData } = createAccountSchema.parse(req.body);
-  const account = store.createAccount(accountData);
+  const account = await store.createAccount(accountData);
 
   if (branchName && branchName.trim()) {
-    store.createBranch({
+    await store.createBranch({
       name: branchName.trim(),
       accountId: account.id
     });
@@ -68,7 +68,7 @@ accountRoutes.patch("/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER",
   }
 
   const body = updateAccountSchema.parse(req.body);
-  const account = store.updateAccount(req.params.id, body);
+  const account = await store.updateAccount(req.params.id, body);
 
   if (!account) {
     return res.status(404).json({ message: "Company not found" });
@@ -82,7 +82,7 @@ accountRoutes.delete("/:id", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"
     return res.status(400).json({ message: "You cannot delete the company account you are currently logged into" });
   }
 
-  const success = store.deleteAccount(req.params.id);
+  const success = await store.deleteAccount(req.params.id);
   if (!success) {
     return res.status(404).json({ message: "Company not found" });
   }
@@ -98,17 +98,17 @@ function canAccessAccount(req, accountId) {
   return req.user.accountId === accountId;
 }
 
-accountRoutes.get("/:id/integrations", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), (req, res) => {
+accountRoutes.get("/:id/integrations", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
   if (!canAccessAccount(req, req.params.id)) {
     return res.status(403).json({ message: "You can only view integrations for your own company" });
   }
 
-  if (!store.findAccountById(req.params.id)) {
+  if (!await store.findAccountById(req.params.id)) {
     return res.status(404).json({ message: "Company not found" });
   }
 
   res.json({
-    integrations: store.listAccountIntegrations(req.params.id)
+    integrations: await store.listAccountIntegrations(req.params.id)
   });
 });
 
@@ -124,12 +124,12 @@ const updateIntegrationSchema = z.object({
     .optional()
 });
 
-accountRoutes.patch("/:id/integrations/:platformKey", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), (req, res) => {
+accountRoutes.patch("/:id/integrations/:platformKey", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
   if (!canAccessAccount(req, req.params.id)) {
     return res.status(403).json({ message: "You can only update integrations for your own company" });
   }
 
-  if (!store.findAccountById(req.params.id)) {
+  if (!await store.findAccountById(req.params.id)) {
     return res.status(404).json({ message: "Company not found" });
   }
 
@@ -138,7 +138,7 @@ accountRoutes.patch("/:id/integrations/:platformKey", requireAuth, requireRole("
   }
 
   const body = updateIntegrationSchema.parse(req.body);
-  const integration = store.setAccountIntegration(req.params.id, req.params.platformKey, {
+  const integration = await store.setAccountIntegration(req.params.id, req.params.platformKey, {
     status: body.status,
     config: body.config ?? {}
   });
