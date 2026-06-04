@@ -814,6 +814,22 @@ th:last-child {
   color: #b45309;
 }
 
+.integration-platform-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.integration-platform-chip {
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+}
+
 .muted-text {
   color: #8a98a8;
   font-size: 13px;

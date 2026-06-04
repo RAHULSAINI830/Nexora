@@ -11,6 +11,18 @@ accountRoutes.get("/", requireAuth, requireRole("DEVELOPER"), async (_req, res) 
   res.json({ accounts });
 });
 
+accountRoutes.get("/integrations", requireAuth, requireRole("DEVELOPER"), async (_req, res) => {
+  const accounts = await store.listAccounts();
+  const overview = await Promise.all(
+    accounts.map(async (account) => ({
+      account,
+      integrations: await store.listAccountIntegrations(account.id)
+    }))
+  );
+
+  res.json({ overview });
+});
+
 const createAccountSchema = z.object({
   name: z.string().min(2),
   slug: z.string().min(2).regex(/^[a-z0-9-]+$/),

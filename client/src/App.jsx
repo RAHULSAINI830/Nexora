@@ -406,8 +406,9 @@ function RoleDashboard({ user, records, accounts, branches, onSync, selectedAcco
                 if (!activeComp) return null;
                 
                 // Group users by branch
-                const globalUsers = managedUsers.filter(u => !u.branchId);
-                const branchUsers = (bId) => managedUsers.filter(u => u.branchId === bId);
+                const workspaceUsers = managedUsers.filter((u) => u.accountId === selectedAccountId);
+                const globalUsers = workspaceUsers.filter(u => !u.branchId);
+                const branchUsers = (bId) => workspaceUsers.filter(u => u.branchId === bId);
                 
                 return (
                   <div className="hierarchy-tree" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
@@ -1000,6 +1001,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
 
   // Integrations states (scoped to selected workspace)
   const [connectedIntegrations, setConnectedIntegrations] = useState([]);
+  const [integrationOverview, setIntegrationOverview] = useState([]);
   const [activeConnectingPlatform, setActiveConnectingPlatform] = useState(null);
   const [integrationForm, setIntegrationForm] = useState({
     apiKey: "",
@@ -1023,9 +1025,19 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     setConnectedIntegrations(data.integrations);
   }
 
+  async function loadIntegrationOverview() {
+    if (user.role !== "DEVELOPER") return;
+    const data = await apiRequest("/accounts/integrations");
+    setIntegrationOverview(data.overview || []);
+  }
+
   useEffect(() => {
     loadIntegrations();
   }, [activeIntegrationAccountId]);
+
+  useEffect(() => {
+    loadIntegrationOverview();
+  }, [accounts.length]);
 
   const handleConnectIntegration = async (e) => {
     e.preventDefault();
@@ -1047,6 +1059,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     setActiveConnectingPlatform(null);
     setIntegrationForm({ apiKey: "", clientId: "", clientSecret: "", syncInterval: "1h", sandbox: true });
     await loadIntegrations(activeIntegrationAccountId);
+    await loadIntegrationOverview();
     setNotice(`${activeConnectingPlatform.name} connected successfully.`);
   };
 
@@ -1065,6 +1078,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     });
 
     await loadIntegrations(activeIntegrationAccountId);
+    await loadIntegrationOverview();
     setNotice(`${platformName} disconnected.`);
   };
 
@@ -1251,9 +1265,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   async function loadUsers(accountId) {
     if (!canManageUsers) return;
     setUsersLoading(true);
-    const targetId = user.role === "DEVELOPER"
-      ? (accountId !== undefined ? accountId : userMgmtCompanyFilter)
-      : user.accountId;
+    const targetId = user.role === "DEVELOPER" ? "all" : user.accountId;
     const query = targetId ? `?accountId=${targetId}` : "";
     const data = await apiRequest(`/auth/users${query}`);
     setManagedUsers(data.users);
@@ -1546,10 +1558,13 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
         u.email.toLowerCase().includes(searchTerm.toLowerCase());
       
       const matchRole = filterRole ? u.role === filterRole : true;
+      const matchCompany = user.role !== "DEVELOPER" ||
+        userMgmtCompanyFilter === "all" ||
+        (u.accountId || "global") === userMgmtCompanyFilter;
 
-      return matchSearch && matchRole;
+      return matchSearch && matchRole && matchCompany;
     });
-  }, [groupedUsers, searchTerm, filterRole]);
+  }, [groupedUsers, searchTerm, filterRole, user.role, userMgmtCompanyFilter]);
 
   const groupedByCompany = useMemo(() => {
     const groups = {};
@@ -1866,13 +1881,13 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                           onChange={(e) => {
                             const newFilter = e.target.value;
                             setUserMgmtCompanyFilter(newFilter);
-                            loadUsers(newFilter);
                             loadAdmins(newFilter !== 'all' ? newFilter : selectedAccountId);
                             loadBranches(newFilter !== 'all' ? newFilter : selectedAccountId || user.accountId);
                           }}
                           className="premium-filter-select"
                         >
                           <option value="all">All Companies</option>
+                          <option value="global">Global / System Platform</option>
                           {accounts.map(acc => (
                             <option key={acc.id} value={acc.id}>{acc.name}</option>
                           ))}
@@ -2505,6 +2520,63 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
 
             {settingsTab === "integrations" ? (
               <div key="integrations-tab" className="tab-transition">
+                {user.role === "DEVELOPER" ? (
+                  <div className="table-wrap users-table full-width-table" style={{ marginBottom: '20px' }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Company</th>
+                          <th>Connected Platforms</th>
+                          <th>Connection Summary</th>
+                          <th>Last Connection</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {integrationOverview.map(({ account, integrations }) => {
+                          const connected = integrations.filter((item) => item.status === "connected");
+                          const latestConnection = connected
+                            .map((item) => item.connectedAt)
+                            .filter(Boolean)
+                            .sort()
+                            .at(-1);
+                          return (
+                            <tr key={account.id} className="user-row">
+                              <td>
+                                <div className="account-cell">
+                                  <Building size={14} className="cell-icon" />
+                                  <strong>{account.name}</strong>
+                                </div>
+                              </td>
+                              <td>
+                                <div className="integration-platform-list">
+                                  {connected.length ? connected.map((item) => (
+                                    <span key={item.platformKey} className="integration-platform-chip">
+                                      {item.platformName}
+                                    </span>
+                                  )) : <span className="muted-text">No platforms connected</span>}
+                                </div>
+                              </td>
+                              <td>
+                                <span className={`integration-status-badge ${connected.length ? "connected" : "disconnected"}`}>
+                                  {connected.length} of {integrations.length} connected
+                                </span>
+                              </td>
+                              <td className="muted-text">
+                                {latestConnection ? new Date(latestConnection).toLocaleString() : "Never"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!integrationOverview.length ? (
+                          <tr>
+                            <td colSpan="4" className="empty-state">No companies available.</td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+
                 <div className="users-filter-bar" style={{ marginBottom: '16px' }}>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a' }}>Company Integration Control</h3>
