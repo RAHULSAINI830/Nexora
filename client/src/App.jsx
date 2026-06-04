@@ -31,8 +31,8 @@ const ROLE_LEVELS = {
 };
 
 function Login({ onLogin }) {
-  const [email, setEmail] = useState("developer@cortexy.local");
-  const [password, setPassword] = useState("developer123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -92,30 +92,6 @@ function Login({ onLogin }) {
                 <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" width="18" height="18" />
                 Continue with Google
               </button>
-            </div>
-
-            <div className="login-divider" style={{ margin: '16px 0 12px 0' }}>
-              <span>Quick Role Simulation</span>
-            </div>
-
-            <div className="demo-accounts-grid">
-              {[
-                { label: "Developer", email: "developer@cortexy.local", pass: "developer123" }
-              ].map((acc) => (
-                <button
-                  key={acc.email}
-                  type="button"
-                  className="demo-account-btn"
-                  onClick={() => {
-                    setEmail(acc.email);
-                    setPassword(acc.pass);
-                  }}
-                  title={`Email: ${acc.email} | Password: ${acc.pass}`}
-                >
-                  <span className="demo-role-badge">{acc.label}</span>
-                  <span className="demo-role-email">{acc.email}</span>
-                </button>
-              ))}
             </div>
 
             <p className="login-footer-text" style={{ marginTop: '16px' }}>
