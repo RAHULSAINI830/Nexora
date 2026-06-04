@@ -5,12 +5,18 @@ import bcrypt from "bcryptjs";
 import { createClient } from "@libsql/client";
 import { config } from "./config.js";
 
+let databaseConfigError = null;
+
 if (Boolean(config.tursoDatabaseUrl) !== Boolean(config.tursoAuthToken)) {
-  throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be configured together");
+  databaseConfigError = new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be configured together");
 }
 
 if (process.env.VERCEL && !config.tursoDatabaseUrl) {
-  throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required on Vercel");
+  databaseConfigError = new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required on Vercel");
+}
+
+if (config.tursoDatabaseUrl && !config.tursoDatabaseUrl.startsWith("libsql://")) {
+  databaseConfigError = new Error("TURSO_DATABASE_URL must start with libsql://");
 }
 
 const localDatabasePath = resolve(config.databaseFile);
@@ -18,10 +24,12 @@ if (!config.tursoDatabaseUrl) {
   mkdirSync(dirname(localDatabasePath), { recursive: true });
 }
 
-export const db = createClient({
-  url: config.tursoDatabaseUrl || `file:${localDatabasePath}`,
-  authToken: config.tursoAuthToken || undefined
-});
+export const db = databaseConfigError
+  ? null
+  : createClient({
+      url: config.tursoDatabaseUrl || `file:${localDatabasePath}`,
+      authToken: config.tursoAuthToken || undefined
+    });
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS accounts (
@@ -105,12 +113,20 @@ let initializationPromise;
 
 export function initializeDatabase() {
   if (!initializationPromise) {
-    initializationPromise = db.batch(
-      ["PRAGMA foreign_keys = ON", ...schemaStatements].map((sql) => ({ sql, args: [] })),
-      "write"
-    ).then(() => bootstrapDeveloper());
+    initializationPromise = initializeSchema().then(() => bootstrapDeveloper());
   }
   return initializationPromise;
+}
+
+async function initializeSchema() {
+  if (databaseConfigError) {
+    throw databaseConfigError;
+  }
+
+  await db.execute("PRAGMA foreign_keys = ON");
+  for (const sql of schemaStatements) {
+    await db.execute(sql);
+  }
 }
 
 async function execute(sql, args = []) {
