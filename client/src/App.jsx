@@ -2786,6 +2786,11 @@ export default function App() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
+    if (!localStorage.getItem("cortexy_token")) {
+      setChecking(false);
+      return;
+    }
+
     apiRequest("/auth/me")
       .then((data) => setUser(data.user))
       .catch(() => localStorage.removeItem("cortexy_token"))
