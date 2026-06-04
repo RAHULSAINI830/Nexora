@@ -153,6 +153,38 @@ button {
   box-shadow: 0 0 0 3px rgba(92, 108, 242, 0.15);
 }
 
+.password-input {
+  position: relative;
+}
+
+.password-input input {
+  padding-right: 48px;
+  width: 100%;
+}
+
+.password-toggle {
+  background: transparent;
+  color: #627184;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+}
+
+.password-toggle:hover {
+  color: #111827;
+}
+
+.password-toggle:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid #8b9bf8;
+  outline-offset: 1px;
+}
+
 .secondary-button {
   background: linear-gradient(135deg, #5c6cf2 0%, #8b9bf8 100%);
   border-radius: 10px;
@@ -2320,4 +2352,3 @@ th:last-child {
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25) !important;
   transform: translateY(-1px) !important;
 }
-

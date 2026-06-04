@@ -3,7 +3,7 @@ import {
   AlertCircle, BarChart3, CheckCircle, Database, Link, Pencil, RefreshCcw, 
   Settings, Shield, Trash2, User, UserPlus, Users, X, Activity, Briefcase, 
   DollarSign, Cpu, Sliders, Globe, MapPin, Send, Zap, FileText, Download, 
-  Award, TrendingUp, Building, Clock, LogOut
+  Award, TrendingUp, Building, Clock, LogOut, Eye, EyeOff
 } from "lucide-react";
 import { apiRequest } from "./api";
 import "./styles.css";
@@ -33,6 +33,7 @@ const ROLE_LEVELS = {
 function Login({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -74,7 +75,22 @@ function Login({ onLogin }) {
               </label>
               <label>
                 Password
-                <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
+                <span className="password-input">
+                  <input
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    type={showPassword ? "text" : "password"}
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    title={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </span>
               </label>
 
               {error ? <p className="form-error">{error}</p> : null}
