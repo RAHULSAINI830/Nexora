@@ -66,5 +66,12 @@ app.use((error, _req, res, _next) => {
   }
 
   console.error(error);
+  const errorText = `${error?.name ?? ""} ${error?.message ?? ""}`.toLowerCase();
+  if (errorText.includes("libsql") || errorText.includes("turso") || errorText.includes("database")) {
+    return res.status(500).json({
+      message: "Database connection failed. Check the Turso database URL and database auth token in Vercel."
+    });
+  }
+
   res.status(500).json({ message: "Something went wrong" });
 });
