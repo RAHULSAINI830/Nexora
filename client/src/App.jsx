@@ -944,6 +944,8 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   const [editingUserId, setEditingUserId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [showUserPassword, setShowUserPassword] = useState(false);
+  const [selectedUserDetail, setSelectedUserDetail] = useState(null);
+  const [userDetailLoading, setUserDetailLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [userForm, setUserForm] = useState({
@@ -1468,6 +1470,21 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     }
   }
 
+  async function handleOpenUserDetail(targetUser) {
+    if (user.role !== "DEVELOPER" && user.role !== "SUPER_ADMIN") return;
+    setUserDetailLoading(true);
+    setSelectedUserDetail({ user: targetUser, activityLogs: [] });
+    try {
+      const data = await apiRequest(`/auth/users/${targetUser.id}/details`);
+      setSelectedUserDetail(data);
+    } catch (err) {
+      setNotice(err.message);
+      setSelectedUserDetail(null);
+    } finally {
+      setUserDetailLoading(false);
+    }
+  }
+
   async function handleVerifyUser(targetUser) {
     if (!window.confirm(`Verify ${targetUser.name} without an OTP?`)) {
       return;
@@ -1621,7 +1638,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   function renderTreeNode(node, depth = 0) {
     return (
       <div key={node.id} className={`tree-node-wrapper ${depth > 0 ? "is-child" : "is-root"}`}>
-        <div className="tree-user-card" style={{
+        <div className={`tree-user-card ${user.role === "DEVELOPER" || user.role === "SUPER_ADMIN" ? "clickable-user-row" : ""}`} onClick={() => handleOpenUserDetail(node)} style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -1655,7 +1672,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
             )}
             
             {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && node.id !== user.id) ? (
-              <div className="action-buttons" style={{ display: 'flex', gap: '4px' }}>
+              <div className="action-buttons" onClick={(event) => event.stopPropagation()} style={{ display: 'flex', gap: '4px' }}>
                 {user.role === "DEVELOPER" && !node.emailVerified ? (
                   <>
                     <button className="icon-button" onClick={() => handleSendVerification(node)} title={`Send OTP to ${node.name}`}>
@@ -2003,7 +2020,11 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                       </thead>
                       <tbody>
                         {filteredUsers.map((managedUser) => (
-                          <tr key={managedUser.id} className="user-row">
+                          <tr
+                            key={managedUser.id}
+                            className={`user-row ${user.role === "DEVELOPER" || user.role === "SUPER_ADMIN" ? "clickable-user-row" : ""}`}
+                            onClick={() => handleOpenUserDetail(managedUser)}
+                          >
                             <td>
                               <div className="user-profile">
                                 <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(managedUser.name)}&background=f0f4f8&color=1a2533&rounded=true&bold=true`} alt={managedUser.name} className="user-avatar" />
@@ -2036,7 +2057,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                             </td>
                              <td className="align-right">
                               {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && managedUser.id !== user.id) ? (
-                                <div className="action-buttons">
+                                <div className="action-buttons" onClick={(event) => event.stopPropagation()}>
                                   {user.role === "DEVELOPER" && !managedUser.emailVerified ? (
                                     <>
                                       <button className="icon-button" onClick={() => handleSendVerification(managedUser)} title={`Send OTP to ${managedUser.name}`}>
@@ -2085,6 +2106,70 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                     </table>
                   </div>
                 )}
+
+                <div
+                  className={`user-detail-overlay ${selectedUserDetail ? "open" : ""}`}
+                  onClick={() => setSelectedUserDetail(null)}
+                >
+                  <aside className="user-detail-drawer" onClick={(event) => event.stopPropagation()}>
+                    <div className="drawer-header">
+                      <h3>User Details</h3>
+                      <button type="button" className="drawer-close" onClick={() => setSelectedUserDetail(null)} title="Close user details">
+                        <X size={20} />
+                      </button>
+                    </div>
+
+                    {selectedUserDetail ? (
+                      <div className="user-detail-content">
+                        <div className="user-detail-profile">
+                          <img
+                            src={`https://ui-avatars.com/api/?name=${encodeURIComponent(selectedUserDetail.user.name)}&background=f0f4f8&color=1a2533&rounded=true&bold=true`}
+                            alt={selectedUserDetail.user.name}
+                            className="user-detail-avatar"
+                          />
+                          <div>
+                            <h4>{selectedUserDetail.user.name}</h4>
+                            <p>{selectedUserDetail.user.email}</p>
+                          </div>
+                        </div>
+
+                        <div className="user-detail-grid">
+                          <div><span>Role</span><strong>{roleLabels[selectedUserDetail.user.role]}</strong></div>
+                          <div><span>Company</span><strong>{selectedUserDetail.user.account?.name || "Global / System"}</strong></div>
+                          <div><span>Branch</span><strong>{selectedUserDetail.user.branch?.name || "Not assigned"}</strong></div>
+                          <div><span>Manager</span><strong>{selectedUserDetail.user.admin?.name || "Self managed"}</strong></div>
+                          <div><span>Verification</span><strong title={verificationStatusTitle(selectedUserDetail.user)}>{selectedUserDetail.user.emailVerified ? "Verified" : "Pending"}</strong></div>
+                          <div><span>Created</span><strong>{new Date(selectedUserDetail.user.createdAt).toLocaleString()}</strong></div>
+                        </div>
+
+                        <section className="activity-log-section">
+                          <div className="activity-log-header">
+                            <Activity size={16} />
+                            <h4>Activity Log</h4>
+                          </div>
+                          {userDetailLoading ? <p className="muted-text">Loading activity...</p> : null}
+                          {!userDetailLoading && selectedUserDetail.activityLogs.length ? (
+                            <div className="activity-log-list">
+                              {selectedUserDetail.activityLogs.map((log) => (
+                                <div key={log.id} className="activity-log-item">
+                                  <span className={`activity-dot ${log.statusCode >= 400 ? "error" : ""}`} />
+                                  <div>
+                                    <strong>{log.action.replaceAll("_", " ")}</strong>
+                                    <p>{new Date(log.createdAt).toLocaleString()}</p>
+                                  </div>
+                                  {log.statusCode ? <code>{log.statusCode}</code> : null}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {!userDetailLoading && !selectedUserDetail.activityLogs.length ? (
+                            <p className="muted-text">No activity has been recorded for this user yet.</p>
+                          ) : null}
+                        </section>
+                      </div>
+                    ) : null}
+                  </aside>
+                </div>
 
                 {/* Glassmorphic Slide-Out Form Drawer */}
                 <div className={`drawer-overlay ${isDrawerOpen ? "open" : ""}`} onClick={cancelEdit}>

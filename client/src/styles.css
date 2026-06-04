@@ -1884,6 +1884,174 @@ th:last-child {
   width: 100%;
 }
 
+.clickable-user-row {
+  cursor: pointer;
+}
+
+.user-detail-overlay {
+  background: rgba(15, 23, 42, 0.3);
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: fixed;
+  transition: opacity 0.3s ease;
+  z-index: 1100;
+}
+
+.user-detail-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.user-detail-drawer {
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  bottom: 0;
+  box-shadow: 10px 0 25px rgba(15, 23, 42, 0.12);
+  left: -460px;
+  overflow-y: auto;
+  padding: 30px;
+  position: fixed;
+  top: 0;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  width: min(440px, calc(100vw - 20px));
+}
+
+.user-detail-overlay.open .user-detail-drawer {
+  transform: translateX(460px);
+}
+
+.user-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.user-detail-profile {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+}
+
+.user-detail-avatar {
+  border-radius: 50%;
+  height: 52px;
+  width: 52px;
+}
+
+.user-detail-profile h4,
+.user-detail-profile p {
+  margin: 0;
+}
+
+.user-detail-profile h4 {
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.user-detail-profile p {
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.user-detail-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.user-detail-grid div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.user-detail-grid span,
+.user-detail-grid strong {
+  display: block;
+}
+
+.user-detail-grid span {
+  color: #64748b;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.user-detail-grid strong {
+  color: #1e293b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.activity-log-section {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 20px;
+}
+
+.activity-log-header {
+  align-items: center;
+  color: #334155;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.activity-log-header h4 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.activity-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.activity-log-item {
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 8px 1fr auto;
+  padding: 10px;
+}
+
+.activity-log-item strong,
+.activity-log-item p {
+  margin: 0;
+}
+
+.activity-log-item strong {
+  color: #334155;
+  font-size: 12px;
+}
+
+.activity-log-item p {
+  color: #94a3b8;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.activity-log-item code {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.activity-dot {
+  background: #10b981;
+  border-radius: 50%;
+  height: 7px;
+  width: 7px;
+}
+
+.activity-dot.error {
+  background: #ef4444;
+}
+
 /* Glassmorphic Drawer Component */
 .drawer-overlay {
   position: fixed;

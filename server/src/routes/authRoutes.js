@@ -59,6 +59,13 @@ function filterVisibleUsersForActor(actor, users) {
   return users.filter((u) => u.accountId === actor.accountId && canActOnRole(actor.role, u.role));
 }
 
+function canInspectUser(actor, targetUser) {
+  if (actor.role === "DEVELOPER") return true;
+  return actor.role === "SUPER_ADMIN" &&
+    targetUser.role !== "DEVELOPER" &&
+    targetUser.accountId === actor.accountId;
+}
+
 function resolveAccountIdForActor(actor, requestedAccountId) {
   if (canUseGlobalScope(actor)) {
     return requestedAccountId || actor.accountId;
@@ -116,6 +123,15 @@ authRoutes.post("/login", async (req, res) => {
     });
   }
 
+  await store.createAuditLog({
+    userId: user.id,
+    accountId: user.accountId,
+    action: "LOGIN",
+    method: "POST",
+    path: "/auth/login",
+    statusCode: 200
+  });
+
   res.json({
     token: signToken(user),
     user: safeUser(user)
@@ -144,6 +160,14 @@ authRoutes.post("/verify-email", async (req, res) => {
   }
 
   const verifiedUser = await store.markEmailVerified(user.id, { method: "otp" });
+  await store.createAuditLog({
+    userId: verifiedUser.id,
+    accountId: verifiedUser.accountId,
+    action: "EMAIL_VERIFIED_BY_OTP",
+    method: "POST",
+    path: "/auth/verify-email",
+    statusCode: 200
+  });
   res.json({
     token: signToken(verifiedUser),
     user: safeUser(verifiedUser)
@@ -295,6 +319,19 @@ authRoutes.get("/users", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "B
 
   const users = filterVisibleUsersForActor(req.user, await store.listUsers({ accountId }));
   res.json({ users });
+});
+
+authRoutes.get("/users/:id/details", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER"), async (req, res) => {
+  const targetUser = await store.findUserById(req.params.id);
+  if (!targetUser || !canInspectUser(req.user, targetUser)) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  const activityLogs = await store.listAuditLogs(targetUser.id);
+  res.json({
+    user: safeUser(targetUser),
+    activityLogs
+  });
 });
 
 authRoutes.get("/admins", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {

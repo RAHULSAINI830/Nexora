@@ -2,6 +2,11 @@ import jwt from "jsonwebtoken";
 import { config } from "./config.js";
 import { store } from "./db.js";
 
+function activityName(req) {
+  const path = req.originalUrl?.split("?")[0] || req.path || "/";
+  return `${req.method} ${path}`;
+}
+
 export function signToken(user) {
   return jwt.sign(
     {
@@ -38,6 +43,15 @@ export async function requireAuth(req, res, next) {
     delete user.verificationCodeHash;
     delete user.verificationCodeExpiresAt;
     req.user = user;
+
+    await store.createAuditLog({
+      userId: user.id,
+      accountId: user.accountId,
+      action: activityName(req),
+      method: req.method,
+      path: req.originalUrl?.split("?")[0] || req.path
+    });
+
     next();
   } catch {
     return res.status(401).json({ message: "Invalid auth token" });

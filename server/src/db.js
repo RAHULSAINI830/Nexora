@@ -112,8 +112,23 @@ const schemaStatements = [
     UNIQUE (account_id, platform_key),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
   )`,
+  `CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    account_id TEXT,
+    action TEXT NOT NULL,
+    method TEXT,
+    path TEXT,
+    status_code INTEGER,
+    metadata TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL
+  )`,
   `CREATE INDEX IF NOT EXISTS dashboard_records_account_time_idx
-    ON dashboard_records(account_id, occurred_at)`
+    ON dashboard_records(account_id, occurred_at)`,
+  `CREATE INDEX IF NOT EXISTS audit_logs_user_time_idx
+    ON audit_logs(user_id, created_at)`
 ];
 
 let initializationPromise;
@@ -308,6 +323,27 @@ function mapIntegration(row) {
   };
 }
 
+function mapAuditLog(row) {
+  let metadata = {};
+  try {
+    metadata = JSON.parse(row.metadata || "{}");
+  } catch {
+    metadata = {};
+  }
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    accountId: row.account_id,
+    action: row.action,
+    method: row.method,
+    path: row.path,
+    statusCode: row.status_code,
+    metadata,
+    createdAt: row.created_at
+  };
+}
+
 const userSelect = `
   SELECT users.*, accounts.name AS account_name, accounts.slug AS account_slug,
     admins.name AS admin_name, admins.email AS admin_email, branches.name AS branch_name,
@@ -463,6 +499,22 @@ export const store = {
     return this.listUsers({ accountId, role: "BUSINESS_OWNER" });
   },
 
+  async createAuditLog({ userId, accountId = null, action, method = null, path = null, statusCode = null, metadata = {} }) {
+    if (!userId || !action) return;
+    await execute(`INSERT INTO audit_logs (
+      id, user_id, account_id, action, method, path, status_code, metadata, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [randomUUID(), userId, accountId, action, method, path, statusCode, JSON.stringify(metadata), now()]);
+  },
+
+  async listAuditLogs(userId, limit = 100) {
+    const result = await execute(
+      "SELECT * FROM audit_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+      [userId, limit]
+    );
+    return result.rows.map(mapAuditLog);
+  },
+
   async deleteUser(id) {
     return (await execute("DELETE FROM users WHERE id = ?", [id])).rowsAffected > 0;
   },
@@ -548,7 +600,7 @@ export const store = {
 export async function resetDatabase() {
   await initializeDatabase();
   await db.batch([
-    "DROP TABLE IF EXISTS dashboard_records", "DROP TABLE IF EXISTS account_integrations", "DROP TABLE IF EXISTS users",
+    "DROP TABLE IF EXISTS audit_logs", "DROP TABLE IF EXISTS dashboard_records", "DROP TABLE IF EXISTS account_integrations", "DROP TABLE IF EXISTS users",
     "DROP TABLE IF EXISTS branches", "DROP TABLE IF EXISTS accounts"
   ].map((sql) => ({ sql, args: [] })), "write");
   initializationPromise = db.batch(schemaStatements.map((sql) => ({ sql, args: [] })), "write");
