@@ -942,6 +942,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   const [usersLoading, setUsersLoading] = useState(false);
   const [editingUserId, setEditingUserId] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [showUserPassword, setShowUserPassword] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [userForm, setUserForm] = useState({
@@ -1394,6 +1395,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }
 
   function handleEditUser(targetUser) {
+    setShowUserPassword(false);
     setEditingUserId(targetUser.id);
     setUserForm({
       id: targetUser.id,
@@ -1411,6 +1413,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }
 
   function cancelEdit() {
+    setShowUserPassword(false);
     setEditingUserId(null);
     setUserForm({
       id: "",
@@ -1434,6 +1437,9 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
 
   async function handleDeleteUser(targetUser) {
     setNotice("");
+    if (!window.confirm(`Are you sure you want to delete ${targetUser.name}? This action cannot be undone.`)) {
+      return;
+    }
 
     try {
       await apiRequest(`/auth/users/${targetUser.id}`, { method: "DELETE" });
@@ -1507,6 +1513,14 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   function buildUserTree(usersList) {
     const userMap = {};
     const roots = [];
+    const fallbackParentRoles = {
+      BUSINESS_OWNER: ["SUPER_ADMIN"],
+      MARKETING_MANAGER: ["BUSINESS_OWNER", "SUPER_ADMIN"],
+      OPERATIONS_MANAGER: ["BUSINESS_OWNER", "SUPER_ADMIN"],
+      BRANCH_MANAGER: ["BUSINESS_OWNER", "SUPER_ADMIN"],
+      TECHNICIAN: ["BRANCH_MANAGER", "BUSINESS_OWNER", "SUPER_ADMIN"],
+      ANALYST: ["BUSINESS_OWNER", "SUPER_ADMIN"]
+    };
     
     // Initialize map
     usersList.forEach(u => {
@@ -1516,8 +1530,16 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     // Link children to parents
     usersList.forEach(u => {
       const mapped = userMap[u.id];
-      if (u.adminId && userMap[u.adminId]) {
-        userMap[u.adminId].children.push(mapped);
+      const explicitParent = u.adminId && userMap[u.adminId] ? userMap[u.adminId] : null;
+      const fallbackParent = !explicitParent
+        ? (fallbackParentRoles[u.role] || [])
+            .map((role) => usersList.find((candidate) => candidate.role === role && candidate.id !== u.id))
+            .find(Boolean)
+        : null;
+      const parent = explicitParent || (fallbackParent ? userMap[fallbackParent.id] : null);
+
+      if (parent) {
+        parent.children.push(mapped);
       } else {
         roots.push(mapped);
       }
@@ -1528,28 +1550,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
 
   function renderTreeNode(node, depth = 0) {
     return (
-      <div key={node.id} className="tree-node-wrapper" style={{ marginLeft: depth > 0 ? '36px' : '0', marginTop: '12px', position: 'relative' }}>
-        {depth > 0 && (
-          <div className="tree-connect-line" style={{
-            position: 'absolute',
-            left: '-20px',
-            top: '-6px',
-            width: '2px',
-            height: '32px',
-            background: 'rgba(174, 182, 251, 0.2)'
-          }} />
-        )}
-        {depth > 0 && (
-          <div className="tree-connect-horizontal" style={{
-            position: 'absolute',
-            left: '-18px',
-            top: '20px',
-            width: '16px',
-            height: '2px',
-            background: 'rgba(174, 182, 251, 0.2)'
-          }} />
-        )}
-        
+      <div key={node.id} className={`tree-node-wrapper ${depth > 0 ? "is-child" : "is-root"}`}>
         <div className="tree-user-card" style={{
           display: 'flex',
           alignItems: 'center',
@@ -1833,6 +1834,29 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                 {userMgmtViewMode === "tree" ? (
                   /* Visual Grouped Tree Hierarchy Mode */
                   <div className="visual-tree-view-container" style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <section className="role-hierarchy-reference" aria-label="Role hierarchy">
+                      <h4>Role Hierarchy</h4>
+                      <div className="role-hierarchy-tree">
+                        <div className="role-hierarchy-node role-developer">Developer</div>
+                        <div className="role-hierarchy-children">
+                          <div className="role-hierarchy-node role-super_admin">Super Admin</div>
+                          <div className="role-hierarchy-children">
+                            <div className="role-hierarchy-node role-business_owner">Business Owner</div>
+                            <div className="role-hierarchy-children role-hierarchy-grid">
+                              <div className="role-hierarchy-node role-marketing_manager">Marketing Manager</div>
+                              <div className="role-hierarchy-node role-operations_manager">Operations Manager</div>
+                              <div className="role-hierarchy-branch">
+                                <div className="role-hierarchy-node role-branch_manager">Branch Manager</div>
+                                <div className="role-hierarchy-children">
+                                  <div className="role-hierarchy-node role-technician">Technician</div>
+                                </div>
+                              </div>
+                              <div className="role-hierarchy-node role-analyst">Read-Only Analyst</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
                     {groupedByCompany.map((group) => {
                       const treeRoots = buildUserTree(group.users);
                       const isGlobalGroup = group.id === "global";
@@ -2002,14 +2026,25 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                       
                       <label>
                         <span>Password {editingUserId ? <span className="muted-text" style={{fontWeight: 400}}>(leave blank to keep current)</span> : ""}</span>
-                        <input
-                          value={userForm.password}
-                          onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
-                          minLength="8"
-                          placeholder={editingUserId ? "Leave blank to keep unchanged" : "Minimum 8 characters"}
-                          type="password"
-                          required={!editingUserId}
-                        />
+                        <span className="password-input">
+                          <input
+                            value={userForm.password}
+                            onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
+                            minLength="8"
+                            placeholder={editingUserId ? "Leave blank to keep unchanged" : "Minimum 8 characters"}
+                            type={showUserPassword ? "text" : "password"}
+                            required={!editingUserId}
+                          />
+                          <button
+                            type="button"
+                            className="password-toggle"
+                            onClick={() => setShowUserPassword((visible) => !visible)}
+                            aria-label={showUserPassword ? "Hide password" : "Show password"}
+                            title={showUserPassword ? "Hide password" : "Show password"}
+                          >
+                            {showUserPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                          </button>
+                        </span>
                       </label>
                       
                       {/* Company Selection Dropdown for Developer & Super Admin */}
