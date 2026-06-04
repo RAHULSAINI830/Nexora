@@ -165,6 +165,44 @@ authRoutes.post("/resend-verification", async (req, res) => {
   res.json({ message: "If the account requires verification, a new code has been sent." });
 });
 
+authRoutes.post("/users/:id/verify-email", requireAuth, requireRole("DEVELOPER"), async (req, res) => {
+  const targetUser = await store.findUserById(req.params.id);
+  if (!targetUser) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  if (targetUser.emailVerified) {
+    return res.json({ user: safeUser(targetUser), message: `${targetUser.name} is already verified.` });
+  }
+
+  const verifiedUser = await store.markEmailVerified(targetUser.id);
+  res.json({
+    user: safeUser(verifiedUser),
+    message: `${targetUser.name} was verified manually.`
+  });
+});
+
+authRoutes.post("/users/:id/send-verification", requireAuth, requireRole("DEVELOPER"), async (req, res) => {
+  const targetUser = await store.findUserById(req.params.id);
+  if (!targetUser) {
+    return res.status(404).json({ message: "User not found" });
+  }
+
+  if (targetUser.emailVerified) {
+    return res.status(400).json({ message: `${targetUser.name} is already verified.` });
+  }
+
+  try {
+    await issueVerificationCode(targetUser);
+    res.json({ message: `A verification code was sent to ${targetUser.email}.` });
+  } catch (error) {
+    console.error("Failed to send verification email", error);
+    res.status(502).json({
+      message: `Email delivery failed: ${error.message || "Check the Resend configuration."}`
+    });
+  }
+});
+
 authRoutes.get("/me", requireAuth, (req, res) => {
   res.json({ user: req.user });
 });

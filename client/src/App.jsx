@@ -1451,6 +1451,32 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     }
   }
 
+  async function handleVerifyUser(targetUser) {
+    if (!window.confirm(`Verify ${targetUser.name} without an OTP?`)) {
+      return;
+    }
+
+    setNotice("");
+    try {
+      const data = await apiRequest(`/auth/users/${targetUser.id}/verify-email`, { method: "POST" });
+      setNotice(data.message);
+      await loadUsers(userMgmtCompanyFilter || selectedAccountId);
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
+  async function handleSendVerification(targetUser) {
+    setNotice("");
+    try {
+      const data = await apiRequest(`/auth/users/${targetUser.id}/send-verification`, { method: "POST" });
+      setNotice(data.message);
+      await loadUsers(userMgmtCompanyFilter || selectedAccountId);
+    } catch (err) {
+      setNotice(err.message);
+    }
+  }
+
   const totals = useMemo(() => {
     const healthy = records.filter((record) => record.status === "healthy").length;
     const accountsVisible = canManageAccounts ? accounts.length : user.accountId ? 1 : 0;
@@ -1575,21 +1601,38 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
             <span className={`status role-${node.role.toLowerCase()}`} style={{ margin: 0, padding: '3px 8px', fontSize: '10px' }}>
               {roleLabels[node.role]}
             </span>
+            <span className={`verification-status ${node.emailVerified ? "verified" : "pending"}`}>
+              {node.emailVerified ? "Verified" : "Pending"}
+            </span>
             {node.branch?.name && (
               <span style={{ fontSize: '11px', background: '#f1f5f9', border: '1px solid #e2e8f0', padding: '2px 6px', borderRadius: '4px', color: '#5c6cf2' }}>
                 {node.branch.name}
               </span>
             )}
             
-            {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) ? (
+            {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && !node.emailVerified) ? (
               <div className="action-buttons" style={{ display: 'flex', gap: '4px' }}>
-                <button className="icon-button" onClick={() => handleEditUser(node)} title={`Edit ${node.name}`}>
-                  <Pencil size={14} />
-                </button>
-                {node.id !== user.id ? (
-                  <button className="icon-button danger" onClick={() => handleDeleteUser(node)} title={`Delete ${node.name}`}>
-                    <Trash2 size={14} />
-                  </button>
+                {user.role === "DEVELOPER" && !node.emailVerified ? (
+                  <>
+                    <button className="icon-button" onClick={() => handleSendVerification(node)} title={`Send OTP to ${node.name}`}>
+                      <Send size={14} />
+                    </button>
+                    <button className="icon-button success" onClick={() => handleVerifyUser(node)} title={`Verify ${node.name} without OTP`}>
+                      <CheckCircle size={14} />
+                    </button>
+                  </>
+                ) : null}
+                {ROLE_LEVELS[node.role] < (ROLE_LEVELS[user.role] || 0) ? (
+                  <>
+                    <button className="icon-button" onClick={() => handleEditUser(node)} title={`Edit ${node.name}`}>
+                      <Pencil size={14} />
+                    </button>
+                    {node.id !== user.id ? (
+                      <button className="icon-button danger" onClick={() => handleDeleteUser(node)} title={`Delete ${node.name}`}>
+                        <Trash2 size={14} />
+                      </button>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             ) : (
@@ -1928,6 +1971,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                           <th>Account</th>
                           <th>Branch</th>
                           <th>Admin</th>
+                          <th>Verification</th>
                           <th className="align-right">Action</th>
                         </tr>
                       </thead>
@@ -1959,16 +2003,35 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                             <td>
                               <span className="admin-name">{managedUser.admin?.name ?? (managedUser.role === "BUSINESS_OWNER" || managedUser.role === "SUPER_ADMIN" || managedUser.role === "DEVELOPER" ? "Self managed" : "Unassigned")}</span>
                             </td>
+                            <td>
+                              <span className={`verification-status ${managedUser.emailVerified ? "verified" : "pending"}`}>
+                                {managedUser.emailVerified ? "Verified" : "Pending"}
+                              </span>
+                            </td>
                              <td className="align-right">
-                              {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) ? (
+                              {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) || (user.role === "DEVELOPER" && !managedUser.emailVerified) ? (
                                 <div className="action-buttons">
-                                  <button className="icon-button" onClick={() => handleEditUser(managedUser)} title={`Edit ${managedUser.name}`}>
-                                    <Pencil size={16} />
-                                  </button>
-                                  {managedUser.id !== user.id ? (
-                                    <button className="icon-button danger" onClick={() => handleDeleteUser(managedUser)} title={`Delete ${managedUser.name}`}>
-                                      <Trash2 size={16} />
-                                    </button>
+                                  {user.role === "DEVELOPER" && !managedUser.emailVerified ? (
+                                    <>
+                                      <button className="icon-button" onClick={() => handleSendVerification(managedUser)} title={`Send OTP to ${managedUser.name}`}>
+                                        <Send size={16} />
+                                      </button>
+                                      <button className="icon-button success" onClick={() => handleVerifyUser(managedUser)} title={`Verify ${managedUser.name} without OTP`}>
+                                        <CheckCircle size={16} />
+                                      </button>
+                                    </>
+                                  ) : null}
+                                  {ROLE_LEVELS[managedUser.role] < (ROLE_LEVELS[user.role] || 0) ? (
+                                    <>
+                                      <button className="icon-button" onClick={() => handleEditUser(managedUser)} title={`Edit ${managedUser.name}`}>
+                                        <Pencil size={16} />
+                                      </button>
+                                      {managedUser.id !== user.id ? (
+                                        <button className="icon-button danger" onClick={() => handleDeleteUser(managedUser)} title={`Delete ${managedUser.name}`}>
+                                          <Trash2 size={16} />
+                                        </button>
+                                      ) : null}
+                                    </>
                                   ) : null}
                                 </div>
                               ) : (
@@ -1979,7 +2042,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                         ))}
                         {!filteredUsers.length && !usersLoading ? (
                           <tr>
-                            <td colSpan="6" className="empty-state">
+                            <td colSpan="7" className="empty-state">
                               <div className="empty-state-content">
                                 <Users size={32} className="empty-icon" />
                                 <p>No users found matching filters.</p>

@@ -48,4 +48,6 @@ export async function sendVerificationCode({ email, name, code }) {
   if (!response.ok) {
     throw new Error(body.message || "Failed to send verification email");
   }
+
+  return body;
 }

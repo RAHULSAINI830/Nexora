@@ -782,6 +782,33 @@ th:last-child {
   color: #a13c2f;
 }
 
+.icon-button.success:hover {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.verification-status {
+  border: 1px solid;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.verification-status.verified {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.verification-status.pending {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+
 .muted-text {
   color: #8a98a8;
   font-size: 13px;
