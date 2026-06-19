@@ -3,17 +3,18 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.PROD 
 export async function apiRequest(path, options = {}) {
   const token = localStorage.getItem("cortexy_token");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const { timeoutMs = 15000, ...fetchOptions } = options;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response;
 
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      ...options,
-      signal: options.signal ?? controller.signal,
+      ...fetchOptions,
+      signal: fetchOptions.signal ?? controller.signal,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers
+        ...fetchOptions.headers
       }
     });
   } catch (error) {

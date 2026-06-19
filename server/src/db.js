@@ -112,6 +112,36 @@ const schemaStatements = [
     UNIQUE (account_id, platform_key),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
   )`,
+  `CREATE TABLE IF NOT EXISTS otterly_resources (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    report_id TEXT,
+    resource_type TEXT NOT NULL,
+    resource_key TEXT NOT NULL,
+    country TEXT,
+    engine TEXT,
+    payload TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, resource_type, resource_key),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS otterly_sync_runs (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    report_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    error TEXT,
+    summary TEXT NOT NULL,
+    created_by_user_id TEXT,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS audit_logs (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -127,6 +157,10 @@ const schemaStatements = [
   )`,
   `CREATE INDEX IF NOT EXISTS dashboard_records_account_time_idx
     ON dashboard_records(account_id, occurred_at)`,
+  `CREATE INDEX IF NOT EXISTS otterly_resources_account_type_idx
+    ON otterly_resources(account_id, resource_type, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS otterly_sync_runs_account_time_idx
+    ON otterly_sync_runs(account_id, started_at)`,
   `CREATE INDEX IF NOT EXISTS audit_logs_user_time_idx
     ON audit_logs(user_id, created_at)`
 ];
@@ -188,29 +222,108 @@ async function runMigrations() {
     });
   }
 
+  const accountProfileMigrationId = "2026-06-16-account-profile-columns";
+  const accountProfileExisting = await db.execute({
+    sql: "SELECT id FROM schema_migrations WHERE id = ?",
+    args: [accountProfileMigrationId]
+  });
+  if (!accountProfileExisting.rows.length) {
+    const columns = await db.execute("PRAGMA table_info(accounts)");
+    const columnNames = new Set(columns.rows.map((column) => column.name));
+    for (const [name, type] of [
+      ["tagline", "TEXT"],
+      ["billing_address_line1", "TEXT"],
+      ["billing_address_line2", "TEXT"],
+      ["city", "TEXT"],
+      ["state", "TEXT"],
+      ["country", "TEXT"],
+      ["zipcode", "TEXT"],
+      ["administrator", "TEXT"],
+      ["cellphone", "TEXT"],
+      ["timezone", "TEXT"],
+      ["locale", "TEXT"],
+      ["language", "TEXT"],
+      ["currency", "TEXT"]
+    ]) {
+      if (!columnNames.has(name)) {
+        await db.execute(`ALTER TABLE accounts ADD COLUMN ${name} ${type}`);
+      }
+    }
+    await db.execute({
+      sql: "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+      args: [accountProfileMigrationId, now()]
+    });
+  }
+
   const auditMigrationId = "2026-06-04-email-verification-audit";
   const auditExisting = await db.execute({
     sql: "SELECT id FROM schema_migrations WHERE id = ?",
     args: [auditMigrationId]
   });
-  if (auditExisting.rows.length) return;
-
-  const auditColumns = await db.execute("PRAGMA table_info(users)");
-  const auditColumnNames = new Set(auditColumns.rows.map((column) => column.name));
-  for (const [name, type] of [
-    ["email_verification_method", "TEXT"],
-    ["email_verified_by_user_id", "TEXT"]
-  ]) {
-    if (!auditColumnNames.has(name)) {
-      await db.execute(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+  if (!auditExisting.rows.length) {
+    const auditColumns = await db.execute("PRAGMA table_info(users)");
+    const auditColumnNames = new Set(auditColumns.rows.map((column) => column.name));
+    for (const [name, type] of [
+      ["email_verification_method", "TEXT"],
+      ["email_verified_by_user_id", "TEXT"]
+    ]) {
+      if (!auditColumnNames.has(name)) {
+        await db.execute(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+      }
     }
+
+    const auditTimestamp = now();
+    await db.execute("UPDATE users SET email_verification_method = 'system' WHERE email_verified_at IS NOT NULL AND email_verification_method IS NULL");
+    await db.execute({
+      sql: "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+      args: [auditMigrationId, auditTimestamp]
+    });
   }
-  const auditTimestamp = now();
-  await db.execute("UPDATE users SET email_verification_method = 'system' WHERE email_verified_at IS NOT NULL AND email_verification_method IS NULL");
-  await db.execute({
-    sql: "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-    args: [auditMigrationId, auditTimestamp]
+
+  const otterlyMigrationId = "2026-06-16-otterly-cache";
+  const otterlyExisting = await db.execute({
+    sql: "SELECT id FROM schema_migrations WHERE id = ?",
+    args: [otterlyMigrationId]
   });
+  if (!otterlyExisting.rows.length) {
+    await db.batch([
+      `CREATE TABLE IF NOT EXISTS otterly_resources (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        report_id TEXT,
+        resource_type TEXT NOT NULL,
+        resource_key TEXT NOT NULL,
+        country TEXT,
+        engine TEXT,
+        payload TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (account_id, resource_type, resource_key),
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS otterly_sync_runs (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        report_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        error TEXT,
+        summary TEXT NOT NULL,
+        created_by_user_id TEXT,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS otterly_resources_account_type_idx
+        ON otterly_resources(account_id, resource_type, updated_at)`,
+      `CREATE INDEX IF NOT EXISTS otterly_sync_runs_account_time_idx
+        ON otterly_sync_runs(account_id, started_at)`,
+      `INSERT INTO schema_migrations (id, applied_at) VALUES ('${otterlyMigrationId}', '${now()}')`
+    ].map((sql) => ({ sql, args: [] })), "write");
+  }
 }
 
 async function execute(sql, args = []) {
@@ -310,6 +423,9 @@ function mapIntegration(row) {
   } catch {
     parsedConfig = {};
   }
+  if (parsedConfig.apiKey) {
+    parsedConfig = { ...parsedConfig, apiKey: "********" };
+  }
   return {
     id: row.id,
     accountId: row.account_id,
@@ -320,6 +436,52 @@ function mapIntegration(row) {
     connectedAt: row.connected_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function mapOtterlyResource(row) {
+  if (!row) return null;
+  let payload = {};
+  try {
+    payload = JSON.parse(row.payload || "{}");
+  } catch {
+    payload = {};
+  }
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    workspaceId: row.workspace_id,
+    reportId: row.report_id,
+    resourceType: row.resource_type,
+    resourceKey: row.resource_key,
+    country: row.country,
+    engine: row.engine,
+    payload,
+    fetchedAt: row.fetched_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapOtterlySyncRun(row) {
+  if (!row) return null;
+  let summary = {};
+  try {
+    summary = JSON.parse(row.summary || "{}");
+  } catch {
+    summary = {};
+  }
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    workspaceId: row.workspace_id,
+    reportId: row.report_id,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    error: row.error,
+    summary,
+    createdByUserId: row.created_by_user_id
   };
 }
 
@@ -356,6 +518,7 @@ const userSelect = `
 `;
 
 export const INTEGRATION_PLATFORMS = [
+  { key: "otterly", name: "OtterlyAI" },
   { key: "servicetitan", name: "ServiceTitan" },
   { key: "housecall", name: "Housecall Pro" },
   { key: "servicetrade", name: "ServiceTrade" },
@@ -407,6 +570,10 @@ export const store = {
 
   async findAccountById(id) {
     return mapAccount(await first("SELECT * FROM accounts WHERE id = ?", [id]));
+  },
+
+  async findAccountBySlug(slug) {
+    return mapAccount(await first("SELECT * FROM accounts WHERE slug = ?", [slug]));
   },
 
   async listAccounts() {
@@ -561,6 +728,46 @@ export const store = {
     return result.rows.map(mapIntegration);
   },
 
+  async getAccountIntegration(accountId, platformKey) {
+    await this.ensureDefaultIntegrations(accountId);
+    return mapIntegration(await first("SELECT * FROM account_integrations WHERE account_id = ? AND platform_key = ?", [accountId, platformKey]));
+  },
+
+  async getAccountIntegrationRawConfig(accountId, platformKey) {
+    await this.ensureDefaultIntegrations(accountId);
+    const row = await first("SELECT config FROM account_integrations WHERE account_id = ? AND platform_key = ?", [accountId, platformKey]);
+    if (!row) return {};
+    try {
+      return JSON.parse(row.config || "{}");
+    } catch {
+      return {};
+    }
+  },
+
+  async findOtterlyWorkspaceAssignment(workspaceId, excludeAccountId = null) {
+    const result = await execute(`SELECT account_integrations.account_id, account_integrations.config,
+      accounts.name AS account_name, accounts.slug AS account_slug
+      FROM account_integrations JOIN accounts ON accounts.id = account_integrations.account_id
+      WHERE account_integrations.platform_key = 'otterly' AND account_integrations.status = 'connected'`);
+    for (const row of result.rows) {
+      if (excludeAccountId && row.account_id === excludeAccountId) continue;
+      try {
+        const integrationConfig = JSON.parse(row.config || "{}");
+        if (integrationConfig.workspaceId === workspaceId) {
+          return {
+            accountId: row.account_id,
+            accountName: row.account_name,
+            accountSlug: row.account_slug,
+            workspaceId
+          };
+        }
+      } catch {
+        // Ignore malformed legacy integration config.
+      }
+    }
+    return null;
+  },
+
   async setAccountIntegration(accountId, platformKey, { status, config: integrationConfig = {} }) {
     if (!INTEGRATION_PLATFORMS.some((item) => item.key === platformKey)) return null;
     await this.ensureDefaultIntegrations(accountId);
@@ -594,13 +801,84 @@ export const store = {
       };
     }), "write");
     return records.length;
+  },
+
+  async createOtterlySyncRun({ accountId, workspaceId, reportId, createdByUserId = null, summary = {} }) {
+    const id = randomUUID();
+    const timestamp = now();
+    await execute(`INSERT INTO otterly_sync_runs (
+      id, account_id, workspace_id, report_id, status, started_at, summary, created_by_user_id
+    ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
+    [id, accountId, workspaceId, reportId, timestamp, JSON.stringify(summary), createdByUserId]);
+    return this.findOtterlySyncRun(id);
+  },
+
+  async finishOtterlySyncRun(id, { status, error = null, summary = {} }) {
+    await execute(`UPDATE otterly_sync_runs SET status = ?, completed_at = ?, error = ?, summary = ? WHERE id = ?`,
+      [status, now(), error, JSON.stringify(summary), id]);
+    return this.findOtterlySyncRun(id);
+  },
+
+  async findOtterlySyncRun(id) {
+    return mapOtterlySyncRun(await first("SELECT * FROM otterly_sync_runs WHERE id = ?", [id]));
+  },
+
+  async latestOtterlySyncRun(accountId) {
+    return mapOtterlySyncRun(await first("SELECT * FROM otterly_sync_runs WHERE account_id = ? ORDER BY started_at DESC LIMIT 1", [accountId]));
+  },
+
+  async upsertOtterlyResources(accountId, { workspaceId, reportId, resources }) {
+    if (!resources.length) return 0;
+    await initializeDatabase();
+    const timestamp = now();
+    await db.batch(resources.map((resource) => ({
+      sql: `INSERT INTO otterly_resources (
+        id, account_id, workspace_id, report_id, resource_type, resource_key, country, engine, payload, fetched_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, resource_type, resource_key) DO UPDATE SET
+        workspace_id = excluded.workspace_id,
+        report_id = excluded.report_id,
+        country = excluded.country,
+        engine = excluded.engine,
+        payload = excluded.payload,
+        fetched_at = excluded.fetched_at,
+        updated_at = excluded.updated_at`,
+      args: [
+        randomUUID(),
+        accountId,
+        workspaceId,
+        reportId || null,
+        resource.resourceType,
+        resource.resourceKey,
+        resource.country || null,
+        resource.engine || null,
+        JSON.stringify(resource.payload || {}),
+        timestamp,
+        timestamp,
+        timestamp
+      ]
+    })), "write");
+    return resources.length;
+  },
+
+  async listOtterlyResources(accountId) {
+    const result = await execute(
+      "SELECT * FROM otterly_resources WHERE account_id = ? ORDER BY resource_type ASC, updated_at DESC",
+      [accountId]
+    );
+    return result.rows.map(mapOtterlyResource);
+  },
+
+  async getOtterlyResourceMap(accountId) {
+    const resources = await this.listOtterlyResources(accountId);
+    return Object.fromEntries(resources.map((resource) => [resource.resourceType, resource]));
   }
 };
 
 export async function resetDatabase() {
   await initializeDatabase();
   await db.batch([
-    "DROP TABLE IF EXISTS audit_logs", "DROP TABLE IF EXISTS dashboard_records", "DROP TABLE IF EXISTS account_integrations", "DROP TABLE IF EXISTS users",
+    "DROP TABLE IF EXISTS otterly_sync_runs", "DROP TABLE IF EXISTS otterly_resources", "DROP TABLE IF EXISTS audit_logs", "DROP TABLE IF EXISTS dashboard_records", "DROP TABLE IF EXISTS account_integrations", "DROP TABLE IF EXISTS users",
     "DROP TABLE IF EXISTS branches", "DROP TABLE IF EXISTS accounts"
   ].map((sql) => ({ sql, args: [] })), "write");
   initializationPromise = db.batch(schemaStatements.map((sql) => ({ sql, args: [] })), "write");

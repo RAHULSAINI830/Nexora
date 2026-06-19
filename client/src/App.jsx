@@ -3,7 +3,8 @@ import {
   AlertCircle, BarChart3, CheckCircle, Database, Link, Pencil, RefreshCcw, 
   Settings, Shield, Trash2, User, UserPlus, Users, X, Activity, Briefcase, 
   DollarSign, Cpu, Sliders, Globe, MapPin, Send, Zap, FileText, Download, 
-  Award, TrendingUp, Building, Clock, LogOut, Eye, EyeOff
+  Award, TrendingUp, Building, Clock, LogOut, Eye, EyeOff, Search, ChevronLeft,
+  MessageSquare, Bot, ExternalLink
 } from "lucide-react";
 import { apiRequest } from "./api";
 import "./styles.css";
@@ -404,7 +405,7 @@ function RoleDashboard({ user, records, accounts, branches, onSync, selectedAcco
               {(() => {
                 const activeComp = accounts.find(a => a.id === selectedAccountId);
                 if (!activeComp) return null;
-                
+
                 // Group users by branch
                 const workspaceUsers = managedUsers.filter((u) => u.accountId === selectedAccountId);
                 const globalUsers = workspaceUsers.filter(u => !u.branchId);
@@ -894,7 +895,1487 @@ function RoleDashboard({ user, records, accounts, branches, onSync, selectedAcco
   return null;
 }
 
+const otterlyDashboardTabs = [
+  ["overview", "Overview", BarChart3],
+  ["prompts", "Prompts", MessageSquare],
+  ["research", "Prompt research", Search],
+  ["citations", "Citations", Link],
+  ["recommendations", "Recommendations", Zap],
+  ["brands", "Brands", Building],
+  ["audits", "GEO audits", Shield],
+  ["account", "Account & sync", RefreshCcw]
+];
+
+function OtterlyDashboardPanel({ data, loading, canSync, onSync, onReload, accounts, selectedAccountId, setSelectedAccountId, user, activeTab }) {
+  const [promptSearch, setPromptSearch] = useState("");
+  const [selectedPromptId, setSelectedPromptId] = useState(null);
+  const [promptDrawerTab, setPromptDrawerTab] = useState("responses");
+  const [selectedResponseIndex, setSelectedResponseIndex] = useState(null);
+  const [citationPage, setCitationPage] = useState(1);
+  const [citationPageSize, setCitationPageSize] = useState(25);
+  const [syncingOtterly, setSyncingOtterly] = useState(false);
+  const [crawlabilityUrl, setCrawlabilityUrl] = useState("");
+  const [contentUrl, setContentUrl] = useState("");
+  const [contentCrawler, setContentCrawler] = useState("ChatGPT-User");
+  const [auditSubmitting, setAuditSubmitting] = useState("");
+  const [auditNotice, setAuditNotice] = useState("");
+  const [expandedCrawlId, setExpandedCrawlId] = useState(null);
+  const [expandedContentId, setExpandedContentId] = useState(null);
+  const dashboard = data?.dashboard;
+  const kpis = dashboard?.kpis || {};
+  const resources = data?.resources || [];
+  const insights = dashboard?.cortexyInsights || [];
+  const citations = dashboard?.citations || [];
+  const prompts = dashboard?.prompts || [];
+  const promptDetails = resources.find((resource) => resource.resourceType === "prompt-details")?.payload?.items || [];
+  const citationPrompts = resources.find((resource) => resource.resourceType === "citation-prompts")?.payload?.items || [];
+  const recommendations = dashboard?.recommendations || [];
+  const aiResponses = dashboard?.aiResponses || [];
+  const detectedBrands = dashboard?.detectedBrands || [];
+  const brandAnalysis = dashboard?.brandAnalysis || {};
+  const citationStats = dashboard?.citationStats || {};
+  const crawlability = dashboard?.audits?.crawlability || [];
+  const content = dashboard?.audits?.content || [];
+  const finishedCrawlAudits = crawlability.filter((check) => ["completed", "crawled", "failed"].includes(check.status));
+  const successfulCrawlAudits = finishedCrawlAudits.filter((check) => ["completed", "crawled"].includes(check.status));
+  const crawlSuccessRate = finishedCrawlAudits.length
+    ? Math.round((successfulCrawlAudits.length / finishedCrawlAudits.length) * 100)
+    : null;
+  const contentReadabilityScores = content
+    .map((check) => Number(check.structuralAnalysis?.overallScore))
+    .filter(Number.isFinite);
+  const averageReadability = contentReadabilityScores.length
+    ? Math.round(contentReadabilityScores.reduce((sum, score) => sum + score, 0) / contentReadabilityScores.length)
+    : null;
+  const accountInfo = dashboard?.accountInfo || {};
+  const connected = data?.integration?.status === "connected";
+
+  if (loading) {
+    return <section className="data-section tab-transition"><p className="muted-text">Loading Otterly data...</p></section>;
+  }
+
+  if (!connected || !resources.length) {
+    return (
+      <section className="data-section tab-transition">
+        <div className="section-header">
+          <h2>AI visibility data</h2>
+        </div>
+        {user.role === "DEVELOPER" && accounts.length ? (
+          <div className="users-filter-bar" style={{ marginBottom: "16px" }}>
+            <span className="muted-text">Selected client</span>
+            <select className="premium-filter-select" value={selectedAccountId || ""} onChange={(event) => setSelectedAccountId(event.target.value)}>
+              <option value="">Select Company</option>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </select>
+          </div>
+        ) : null}
+        <div className="empty-state-content">
+          <Database size={32} className="empty-icon" />
+          <p>No Otterly data is stored yet. Connect the Otterly integration for this company, then refresh the integration data.</p>
+          {user.role === "DEVELOPER" && canSync ? (
+            <button
+              type="button"
+              className="developer-sync-button"
+              onClick={async () => {
+                setSyncingOtterly(true);
+                try {
+                  await onSync();
+                } finally {
+                  setSyncingOtterly(false);
+                }
+              }}
+              disabled={syncingOtterly || !selectedAccountId}
+            >
+              <RefreshCcw size={15} />
+              {syncingOtterly ? "Refreshing..." : "Refresh integration data"}
+            </button>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
+  const metricCards = [
+    ["Brand coverage", `${Number(kpis.brandCoverage || 0).toFixed(1)}%`],
+    ["Domain coverage", `${Number(kpis.domainCoverage || 0).toFixed(1)}%`],
+    ["Share of voice", `${Number(kpis.shareOfVoice || 0).toFixed(1)}%`],
+    ["Avg position", formatCell(kpis.averagePosition)],
+    ["Prompts", kpis.totalPrompts ?? 0],
+    ["Citations", kpis.totalCitations ?? 0]
+  ];
+  const tableEmpty = (colSpan, text) => (
+    <tr>
+      <td colSpan={colSpan} className="empty-state">{text}</td>
+    </tr>
+  );
+
+  const jsonPreview = (value) => (
+    <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: "260px", overflow: "auto", margin: 0, fontSize: "11px", color: "#334155" }}>
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+  function formatCell(value, fallback = "N/A") {
+    if (value === undefined || value === null || value === "") return fallback;
+    if (typeof value === "boolean") return value ? "Yes" : "No";
+    if (typeof value !== "object") return value;
+    if (Array.isArray(value)) {
+      return value.map((item) => formatCell(item, "")).filter(Boolean).join(", ") || fallback;
+    }
+    if ("neutral" in value || "positive" in value || "negative" in value || "nss" in value) {
+      return sentimentLabel(value);
+    }
+    if ("rank" in value || "brand" in value || "mentions" in value) {
+      const parts = [];
+      if (value.brand) parts.push(String(value.brand));
+      if (value.rank !== undefined && value.rank !== null) parts.push(`rank ${value.rank}`);
+      if (value.mentions !== undefined && value.mentions !== null) parts.push(`${value.mentions} mentions`);
+      if (value.brandCoverage !== undefined && value.brandCoverage !== null) parts.push(`${Number(value.brandCoverage).toFixed(1)}% coverage`);
+      if (value.sentiment) parts.push(`sentiment ${formatCell(value.sentiment, "")}`);
+      return parts.join(" / ") || JSON.stringify(value);
+    }
+    return JSON.stringify(value);
+  }
+  const promptResponseGroup = (promptId) => aiResponses.find((group) => group.promptId === promptId) || { items: [] };
+  const promptTotalCitations = (promptId) => promptResponseGroup(promptId).items.reduce((total, response) => total + (response.citations?.length || 0), 0);
+  const normalizeBrandKey = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const competitorDomains = new Map(
+    (dashboard?.competitors || []).flatMap((competitor) => {
+      const domain = competitor.brandDomain || competitor.domain || competitor.url || "";
+      return [competitor.brand, competitor.name, ...(competitor.brandVariations || [])]
+        .filter(Boolean)
+        .map((name) => [normalizeBrandKey(name), domain]);
+    })
+  );
+  const resolveCompetitor = (competitor) => {
+    const value = typeof competitor === "string" ? { brand: competitor } : competitor || {};
+    const brand = value.brand || value.name || value.brandDomain || value.domain || "Competitor";
+    const domain = value.brandDomain
+      || value.domain
+      || value.url
+      || competitorDomains.get(normalizeBrandKey(brand))
+      || "";
+    return { brand, domain };
+  };
+  const promptCompetitors = (prompt) => (prompt.competitors || [])
+    .map(resolveCompetitor)
+    .filter((competitor) => competitor.brand);
+  const competitorLogoUrl = (competitor) => {
+    const rawDomain = competitor.domain || competitor.brandDomain || "";
+    const domain = String(rawDomain).replace(/^https?:\/\//, "").split("/")[0];
+    return domain ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64` : "";
+  };
+  const renderCompetitorIcons = (competitors) => competitors.length ? (
+    <div className="competitor-icons">
+      {competitors.map((competitor, index) => (
+        <span className="competitor-icon-wrap" key={`${competitor.brand}-${competitor.domain || ""}-${index}`}>
+          <span className="competitor-icon">
+            <Building className="competitor-icon-fallback" size={13} />
+            {competitorLogoUrl(competitor) ? (
+              <img
+                src={competitorLogoUrl(competitor)}
+                alt={`${competitor.brand} favicon`}
+                onError={(event) => { event.currentTarget.style.display = "none"; }}
+              />
+            ) : null}
+          </span>
+          <span className="competitor-tooltip">{competitor.brand}</span>
+        </span>
+      ))}
+    </div>
+  ) : "";
+  const filteredPrompts = prompts.filter((prompt) => String(prompt.prompt || "").toLowerCase().includes(promptSearch.toLowerCase()));
+  const selectedPrompt = selectedPromptId ? prompts.find((prompt) => prompt.id === selectedPromptId) : null;
+  const selectedPromptDetail = selectedPrompt
+    ? promptDetails.find((item) => item.id === selectedPrompt.id || item.promptId === selectedPrompt.id) || {}
+    : {};
+  const selectedPromptResponses = selectedPrompt ? promptResponseGroup(selectedPrompt.id).items || [] : [];
+  const selectedResponse = selectedResponseIndex !== null ? selectedPromptResponses[selectedResponseIndex] : null;
+  const selectedPromptCategories = selectedPromptDetail.domainCategories || [];
+  const selectedPromptBrandRank = selectedPromptDetail.brandRank || [];
+  const selectedPromptCoverageHistory = selectedPromptDetail.brandCoverageHistory || [];
+  const totalPromptCategories = selectedPromptCategories.reduce((total, item) => total + Number(item.value || 0), 0);
+  const categoryColors = ["#5c6cf2", "#3fbcd3", "#ff8a4c", "#4f7df3", "#5ac98f", "#8b5cf6", "#f87171", "#94a3b8"];
+  const categoryGradient = selectedPromptCategories.reduce((parts, item, index) => {
+    const previous = selectedPromptCategories.slice(0, index).reduce((sum, category) => sum + Number(category.value || 0), 0);
+    const start = totalPromptCategories ? (previous / totalPromptCategories) * 100 : 0;
+    const end = totalPromptCategories ? ((previous + Number(item.value || 0)) / totalPromptCategories) * 100 : 0;
+    parts.push(`${categoryColors[index % categoryColors.length]} ${start}% ${end}%`);
+    return parts;
+  }, []).join(", ");
+  const promptLabel = (prompt, detail = {}) => String(prompt?.prompt || detail?.prompt || "Untitled prompt");
+  const engineLabel = (engine) => ({
+    perplexity: "Perplexity",
+    google: "Google",
+    chatgpt: "ChatGPT",
+    copilot: "Copilot",
+    gemini: "Gemini",
+    claude: "Claude"
+  }[engine] || "AI");
+  const engineLogoUrl = (engine) => ({
+    perplexity: "https://cdn.simpleicons.org/perplexity/1f2937",
+    google: "https://cdn.simpleicons.org/google",
+    copilot: "https://cdn.simpleicons.org/githubcopilot/1f2937",
+    chatgpt: "https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg"
+  }[engine]);
+  const engineLogo = (engine) => (
+    <span className={`engine-logo engine-${engine || "ai"}`}>
+      {engineLogoUrl(engine) ? <img src={engineLogoUrl(engine)} alt="" /> : <Bot size={13} />}
+    </span>
+  );
+  function sentimentLabel(sentiment) {
+    if (!sentiment || typeof sentiment !== "object") return formatCell(sentiment);
+    const entries = Object.entries(sentiment).filter(([, value]) => Number(value) > 0);
+    return entries.length ? entries.map(([key, value]) => `${key} ${value}`).join(", ") : "N/A";
+  }
+  const sentimentSummary = (sentiment) => {
+    if (!sentiment || typeof sentiment !== "object") return null;
+    const positive = Number(sentiment.positive || 0);
+    const neutral = Number(sentiment.neutral || 0);
+    const negative = Number(sentiment.negative || 0);
+    const total = positive + neutral + negative;
+    if (!total) return null;
+    if (negative > positive && negative >= neutral) return { label: "Negative", tone: "negative", score: sentiment.nss };
+    if (positive > negative && positive >= neutral) return { label: "Positive", tone: "positive", score: sentiment.nss };
+    return { label: "Neutral", tone: "neutral", score: sentiment.nss };
+  };
+  const renderSentiment = (sentiment, emptyLabel = "Not mentioned") => {
+    const summary = sentimentSummary(sentiment);
+    if (!summary) return <span className="sentiment-badge muted">{emptyLabel}</span>;
+    return (
+      <span className={`sentiment-badge ${summary.tone}`}>
+        <i /> {summary.label}
+        {summary.score !== undefined && summary.score !== null ? <small>NSS {summary.score}</small> : null}
+      </span>
+    );
+  };
+  const trackedBrandRank = (detail) => (detail?.brandRank || []).find(
+    (item) => normalizeBrandKey(item.brand) === normalizeBrandKey(dashboard?.brand)
+  );
+  const usagePercent = (used, maximum) => maximum ? Math.min(100, (Number(used || 0) / Number(maximum)) * 100) : 0;
+  const brandRankings = brandAnalysis.brandMentions || [];
+  const latestVisibility = brandAnalysis.brandVisibilityIndex?.at(-1)?.brands || [];
+  const visibilityByBrand = new Map(latestVisibility.map((item) => [normalizeBrandKey(item.brand), item]));
+  const citationDomainStats = citationStats.domainCitations || {};
+  const rankedCitationDomains = citationStats.domainRank?.citations || [];
+  const citationPageCount = Math.max(1, Math.ceil(citations.length / citationPageSize));
+  const safeCitationPage = Math.min(citationPage, citationPageCount);
+  const paginatedCitations = citations.slice((safeCitationPage - 1) * citationPageSize, safeCitationPage * citationPageSize);
+  const existingPromptTexts = new Set(prompts.map((prompt) => String(prompt.prompt || "").toLowerCase().trim()));
+  const promptResearchIdeas = citations
+    .filter((citation) => citation.title || citation.domainCategory)
+    .slice(0, 80)
+    .map((citation) => {
+      const topic = String(citation.title || citation.domainCategory || "AI search").replace(/\s+/g, " ").trim();
+      const shortTopic = topic.replace(/^(how to|how|what is|what are)\s+/i, "").slice(0, 90);
+      const promptText = `Which AI solutions help service companies with ${shortTopic}?`;
+      return {
+        prompt: promptText,
+        source: citation.domain || citation.url,
+        sourceUrl: citation.url,
+        category: citation.domainCategory || "Unclassified",
+        citations: citation.citations ?? 0,
+        reason: citation.brandMentioned
+          ? "Build on a source where the brand already appears."
+          : "Close a citation gap around a source AI engines already reference.",
+        priority: citation.brandMentioned ? "Expand" : "Gap"
+      };
+    })
+    .filter((idea, index, list) => (
+      !existingPromptTexts.has(idea.prompt.toLowerCase()) &&
+      list.findIndex((item) => item.prompt === idea.prompt) === index
+    ))
+    .sort((a, b) => Number(b.citations || 0) - Number(a.citations || 0))
+    .slice(0, 18);
+  async function runGeoAudit(type) {
+    const rawUrl = type === "crawlability" ? crawlabilityUrl : contentUrl;
+    if (!rawUrl) return;
+    const url = /^https?:\/\//i.test(rawUrl.trim()) ? rawUrl.trim() : `https://${rawUrl.trim()}`;
+    setAuditNotice("");
+    setAuditSubmitting(type);
+    try {
+      const result = await apiRequest(`/dashboard/otterly/audits/${type}`, {
+        method: "POST",
+        body: JSON.stringify({
+          accountId: user.role === "DEVELOPER" ? selectedAccountId : undefined,
+          url,
+          ...(type === "content" ? { crawlerIdentity: contentCrawler, sendOtterlyHeader: true } : {})
+        }),
+        timeoutMs: 120000
+      });
+      setAuditNotice(`${type === "crawlability" ? "Crawlability" : "Content"} check started for ${url}. Status: ${result.audit?.status || "pending"}. Results can take a little time to finish in Otterly.`);
+      if (type === "crawlability") setCrawlabilityUrl("");
+      if (type === "content") setContentUrl("");
+      await onReload?.();
+    } catch (error) {
+      if (error.code === "OTTERLY_REQUEST_LIMIT" || error.status === 429) {
+        setAuditNotice("Otterly's team request limit is exhausted. The checker will work again after Otterly resets the quota or the account limit is increased.");
+      } else if (error.code === "OTTERLY_AUDIT_FORBIDDEN" || error.status === 403) {
+        setAuditNotice("Otterly denied audit creation for this workspace. Enable GEO audit API write access or move the Otterly account to an eligible plan, then try again.");
+      } else {
+        setAuditNotice(`${error.status ? `Error ${error.status}: ` : ""}${error.message || "Failed to start audit."}`);
+      }
+    } finally {
+      setAuditSubmitting("");
+    }
+  }
+  const exportPromptsCsv = () => {
+    const rows = [
+      ["Prompt", "Tags", "Intent Volume", "My Brand Mentions", "Brand Sentiment", "My Domain Citations", "Total Citations", "Competitors"],
+      ...filteredPrompts.map((prompt) => [
+        prompt.prompt || "",
+        formatCell(prompt.tags || [], ""),
+        prompt.volume ?? prompt.intentVolume ?? "",
+        prompt.brandMentions ?? 0,
+        formatCell(prompt.brandRank ?? ""),
+        prompt.domainMentions ?? 0,
+        promptTotalCitations(prompt.id),
+        promptCompetitors(prompt).map((competitor) => competitor.brand).join("; ")
+      ])
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${dashboard?.brand || "otterly"}-prompts.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportCitationsCsv = () => {
+    const rows = [
+      ["Title", "URL", "Domain", "Category", "Citations", "Brand Mentioned", "Competitors"],
+      ...citations.map((item) => [
+        item.title || "",
+        item.url || "",
+        item.domain || "",
+        item.domainCategory || "Unclassified",
+        item.citations ?? 0,
+        item.brandMentioned ? "Yes" : "No",
+        (item.competitors || []).map((competitor) => competitor.brand || competitor).join("; ")
+      ])
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${dashboard?.brand || "otterly"}-citations.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+    <section className="data-section tab-transition">
+      {user.role === "DEVELOPER" && accounts.length ? (
+        <div className="otterly-panel-controls">
+          <span className="muted-text">Selected client</span>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <select className="premium-filter-select" value={selectedAccountId || ""} onChange={(event) => setSelectedAccountId(event.target.value)}>
+              <option value="">Select Company</option>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </select>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "overview" ? (
+        <>
+          <div className="role-grid">
+            {metricCards.map(([label, value]) => (
+              <div className="role-card" key={label}>
+                <div className="role-card-header">
+                  <BarChart3 size={16} className="icon-blue" />
+                  <h4>{label}</h4>
+                </div>
+                <strong style={{ fontSize: "26px", color: "#0f172a" }}>{value}</strong>
+              </div>
+            ))}
+          </div>
+
+          <div className="role-grid" style={{ marginTop: "16px" }}>
+            <div className="role-card double-width-card">
+              <div className="role-card-header">
+                <Zap size={16} className="icon-teal" />
+                <h4>Cortexy optimization layer</h4>
+              </div>
+              <div className="stat-group">
+                {insights.length ? insights.map((insight, index) => (
+                  <div className="stat-row" key={`${insight.type}-${index}`} style={{ alignItems: "flex-start", gap: "12px" }}>
+                    <span style={{ minWidth: "96px", textTransform: "capitalize" }}>{insight.priority}</span>
+                    <strong style={{ flex: 1 }}>
+                      {insight.title}
+                      <small className="muted-text" style={{ display: "block", fontWeight: 500, marginTop: "4px" }}>{insight.detail}</small>
+                    </strong>
+                  </div>
+                )) : <p className="muted-text">No Cortexy optimization insights yet. Sync more Otterly data to generate actions.</p>}
+              </div>
+            </div>
+
+            <div className="role-card">
+              <div className="role-card-header">
+                <Cpu size={16} className="icon-gold" />
+                <h4>Otterly usage</h4>
+              </div>
+              <div className="stat-group">
+                <div className="stat-row"><span>Plan</span><strong>{accountInfo.subscriptionPlan || "N/A"}</strong></div>
+                <div className="stat-row"><span>Prompts</span><strong>{accountInfo.promptsUsedCount ?? 0}/{accountInfo.promptsMaxCount ?? 0}</strong></div>
+                <div className="stat-row"><span>API requests</span><strong>{accountInfo.apiRequestsUsedCount ?? 0}/{accountInfo.apiRequestsMaxCount ?? 0}</strong></div>
+                <div className="stat-row"><span>GEO audits</span><strong>{accountInfo.geoAuditUsedCount ?? 0}/{accountInfo.geoAuditMaxCount ?? 0}</strong></div>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {activeTab === "prompts" ? (
+        <div className="prompt-workspace">
+          <div className="prompt-page-header">
+            <div>
+              <p className="prompt-breadcrumb">Brand Report / {dashboard?.brand || "Brand"} / Prompts</p>
+              <h2>Prompts</h2>
+              <p className="muted-text">See which AI prompts mention your brand, and which mention your competitors.</p>
+            </div>
+            <button className="prompt-export-button" onClick={exportPromptsCsv}>
+              <Download size={15} /> Export as CSV
+            </button>
+          </div>
+
+          <div className="prompt-toolbar">
+            <div className="prompt-filter-group">
+              <button className="prompt-filter-button">Last 14 days</button>
+              <button className="prompt-filter-button">All tags</button>
+              <button className="prompt-filter-button">All Engines</button>
+              <button className="prompt-filter-button">United States</button>
+            </div>
+            <label className="prompt-search">
+              <input
+                value={promptSearch}
+                onChange={(event) => setPromptSearch(event.target.value)}
+                placeholder="Search by prompt text..."
+              />
+              <Search size={15} />
+            </label>
+          </div>
+
+          <div className="prompt-table-card">
+            <table className="prompt-table">
+              <thead>
+                <tr>
+                  <th>Prompt</th>
+                  <th>Tags</th>
+                  <th>Intent Volume</th>
+                  <th>My Brand Mentions</th>
+                  <th>Brand Sentiment</th>
+                  <th>My Domain Citations</th>
+                  <th>Total Citations</th>
+                  <th>Competitors</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPrompts.map((prompt) => {
+                  const detail = promptDetails.find((item) => item.id === prompt.id || item.promptId === prompt.id) || {};
+                  const competitorsForPrompt = promptCompetitors(prompt);
+                  return (
+                    <tr
+                      key={prompt.id || prompt.prompt}
+                      className="prompt-table-row"
+                      onClick={() => {
+                        setSelectedPromptId(prompt.id);
+                        setPromptDrawerTab("responses");
+                        setSelectedResponseIndex(null);
+                      }}
+                    >
+                      <td className="prompt-title-cell">
+                        <button type="button" className="prompt-link">
+                          {promptLabel(prompt, detail).slice(0, 76)}{promptLabel(prompt, detail).length > 76 ? "..." : ""}
+                        </button>
+                      </td>
+                      <td>{formatCell(prompt.tags || detail.tags || [], "")}</td>
+                      <td>
+                        <div className="intent-meter">
+                          {Array.from({ length: 5 }).map((_, index) => (
+                            <span key={index} className={index === 0 ? "active" : ""} />
+                          ))}
+                        </div>
+                      </td>
+                      <td>{prompt.brandMentions ?? 0}</td>
+                      <td>{renderSentiment(trackedBrandRank(detail)?.sentiment)}</td>
+                      <td>{prompt.domainMentions ?? 0}</td>
+                      <td>{promptTotalCitations(prompt.id)}</td>
+                      <td>{renderCompetitorIcons(competitorsForPrompt)}</td>
+                    </tr>
+                  );
+                })}
+                {!filteredPrompts.length ? tableEmpty(8, "No prompts matched your search.") : null}
+              </tbody>
+            </table>
+          </div>
+          <p className="prompt-result-count">Viewing {filteredPrompts.length ? `1-${filteredPrompts.length}` : "0"} of {filteredPrompts.length} results</p>
+        </div>
+      ) : null}
+
+      {activeTab === "research" ? (
+        <div className="research-workspace">
+          <div className="prompt-page-header">
+            <div>
+              <p className="prompt-breadcrumb">Cortexy Intelligence / {dashboard?.brand || "Brand"} / Prompt Research</p>
+              <h2>AI Prompt Research</h2>
+              <p className="muted-text">New prompt opportunities generated from real citations, categories, and competitor gaps already synced from Otterly.</p>
+            </div>
+            <button className="prompt-export-button" onClick={exportPromptsCsv}>
+              <Download size={15} /> Export tracked prompts
+            </button>
+          </div>
+
+          <div className="research-summary-grid">
+            <div className="research-summary-card">
+              <Search size={16} />
+              <span>Tracked prompts</span>
+              <strong>{prompts.length}</strong>
+            </div>
+            <div className="research-summary-card">
+              <Link size={16} />
+              <span>Cited sources analyzed</span>
+              <strong>{citations.length}</strong>
+            </div>
+            <div className="research-summary-card">
+              <Zap size={16} />
+              <span>New opportunities</span>
+              <strong>{promptResearchIdeas.length}</strong>
+            </div>
+          </div>
+
+          <div className="research-list">
+            {promptResearchIdeas.map((idea) => (
+              <div className="research-card" key={idea.prompt}>
+                <div className="research-card-main">
+                  <span className="research-priority">{idea.priority}</span>
+                  <h3>{idea.prompt}</h3>
+                  <p>{idea.reason}</p>
+                  <div className="research-meta">
+                    <span>{idea.category}</span>
+                    <span>{idea.citations} citations</span>
+                    {idea.sourceUrl ? <a href={idea.sourceUrl} target="_blank" rel="noreferrer">{idea.source}</a> : <span>{idea.source}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!promptResearchIdeas.length ? (
+              <div className="overview-empty-state">
+                <Search size={42} />
+                <span>No new prompt opportunities found from the current synced data.</span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "citations" ? (
+        <div className="citation-workspace">
+          <div className="prompt-page-header">
+            <div>
+              <p className="prompt-breadcrumb">Brand Report / {dashboard?.brand || "Brand"} / Citations</p>
+              <h2>Citations</h2>
+              <p className="muted-text">Review the sources AI engines cite for this brand report.</p>
+            </div>
+            <button className="prompt-export-button" onClick={exportCitationsCsv}>
+              <Download size={15} /> Export as CSV
+            </button>
+          </div>
+
+          <div className="citation-summary-grid">
+            <div className="citation-summary-card">
+              <Link size={16} />
+              <span>Total citation URLs</span>
+              <strong>{citations.length}</strong>
+            </div>
+            <div className="citation-summary-card">
+              <Building size={16} />
+              <span>Domains tracked</span>
+              <strong>{new Set(citations.map((item) => item.domain).filter(Boolean)).size}</strong>
+            </div>
+            <div className="citation-summary-card">
+              <FileText size={16} />
+              <span>Citation prompt maps</span>
+              <strong>{citationPrompts.length}</strong>
+            </div>
+          </div>
+
+          <div className="citation-table-card">
+            <table className="prompt-table citation-table">
+              <thead>
+                <tr>
+                  <th>Cited URL</th>
+                  <th>Domain</th>
+                  <th>Category</th>
+                  <th>Citations</th>
+                  <th>Brand mentioned</th>
+                  <th>Competitors</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedCitations.map((item) => {
+                  const citationCompetitors = (item.competitors || [])
+                    .map(resolveCompetitor)
+                    .filter((competitor) => competitor.brand);
+                  return (
+                    <tr key={item.url}>
+                      <td className="citation-title-cell">
+                        <a href={item.url} target="_blank" rel="noreferrer">
+                          <strong>{item.title || item.url}</strong>
+                          <span>{item.url}</span>
+                        </a>
+                      </td>
+                      <td>{item.domain || "N/A"}</td>
+                      <td>{item.domainCategory || "Unclassified"}</td>
+                      <td>{item.citations ?? 0}</td>
+                      <td>{item.brandMentioned ? "Yes" : "No"}</td>
+                      <td>{renderCompetitorIcons(citationCompetitors) || "None"}</td>
+                    </tr>
+                  );
+                })}
+                {!citations.length ? tableEmpty(6, "No citations synced yet.") : null}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="citation-pagination">
+            <span>
+              Showing {citations.length ? ((safeCitationPage - 1) * citationPageSize) + 1 : 0}
+              -{Math.min(safeCitationPage * citationPageSize, citations.length)} of {citations.length}
+            </span>
+            <label>
+              Rows per page
+              <select
+                value={citationPageSize}
+                onChange={(event) => {
+                  setCitationPageSize(Number(event.target.value));
+                  setCitationPage(1);
+                }}
+              >
+                {[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            <div className="citation-page-buttons">
+              <button type="button" onClick={() => setCitationPage((page) => Math.max(1, page - 1))} disabled={safeCitationPage <= 1}>Previous</button>
+              <strong>{safeCitationPage} / {citationPageCount}</strong>
+              <button type="button" onClick={() => setCitationPage((page) => Math.min(citationPageCount, page + 1))} disabled={safeCitationPage >= citationPageCount}>Next</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "recommendations" ? (
+        <div className="table-wrap users-table full-width-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Recommendation</th>
+                <th>Type</th>
+                <th>Engine</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Data</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recommendations.map((item) => (
+                <tr key={item.id || `${item.type}-${item.priority}`}>
+                  <td><strong>{item.group || item.type || "Recommendation"}</strong></td>
+                  <td>{item.type || item.checkerType || "N/A"}</td>
+                  <td>{item.engine || "all"}</td>
+                  <td>{formatCell(item.priority ?? item.score)}</td>
+                  <td>{formatCell(item.state || item.status || "suggested")}</td>
+                  <td style={{ minWidth: "320px" }}>{jsonPreview(item.data || {})}</td>
+                </tr>
+              ))}
+              {!recommendations.length ? tableEmpty(6, "No recommendations synced yet.") : null}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {activeTab === "brands" ? (
+        <div className="brands-workspace">
+          <div className="prompt-page-header">
+            <div>
+              <p className="prompt-breadcrumb">Brand intelligence / {dashboard?.brand || "Brand"}</p>
+              <h2>Brand visibility</h2>
+              <p className="muted-text">Compare the tracked brand with companies appearing across AI answers.</p>
+            </div>
+          </div>
+
+          <div className="brand-summary-grid">
+            <div className="brand-identity-card">
+              <span className="brand-logo-large">
+                {dashboard?.brandDomain ? <img src={competitorLogoUrl({ domain: dashboard.brandDomain })} alt="" /> : <Building size={22} />}
+              </span>
+              <div><span>Tracked brand</span><strong>{dashboard?.brand || "N/A"}</strong><small>{dashboard?.brandDomain || "No domain"}</small></div>
+            </div>
+            <div className="brand-metric-card"><Users size={18} /><span>Configured competitors</span><strong>{dashboard?.competitors?.length || 0}</strong></div>
+            <div className="brand-metric-card"><Award size={18} /><span>Brands detected</span><strong>{detectedBrands.length}</strong></div>
+            <div className="brand-metric-card"><Globe size={18} /><span>Markets tracked</span><strong>{dashboard?.countries?.length || 0}</strong></div>
+          </div>
+
+          <section className="brand-section">
+            <div className="brand-section-heading"><div><h3>AI visibility ranking</h3><p>Brand mentions, share of voice, coverage, and Otterly visibility scores.</p></div></div>
+            <div className="brand-table-wrap">
+              <table className="brand-table">
+                <thead><tr><th>Rank</th><th>Brand</th><th>Mentions</th><th>Share of voice</th><th>Coverage</th><th>Visibility</th></tr></thead>
+                <tbody>
+                  {brandRankings.map((item) => {
+                    const visibility = visibilityByBrand.get(normalizeBrandKey(item.brand));
+                    const competitor = resolveCompetitor({ brand: item.brand, domain: item.isMainBrand ? dashboard?.brandDomain : "" });
+                    return (
+                      <tr key={item.brand} className={item.isMainBrand ? "main-brand-row" : ""}>
+                        <td><span className="brand-rank">{item.rank ?? "-"}</span></td>
+                        <td><div className="brand-name-cell"><span className="brand-logo-small"><Building size={13} />{competitorLogoUrl(competitor) ? <img src={competitorLogoUrl(competitor)} alt="" /> : null}</span><div><strong>{item.brand}</strong>{item.isMainBrand ? <small>Your brand</small> : null}</div></div></td>
+                        <td><strong>{item.mentions ?? 0}</strong></td>
+                        <td>{Number(item.shareOfVoice || 0).toFixed(0)}%</td>
+                        <td><div className="brand-coverage"><span><i style={{ width: `${Math.min(100, Number(item.brandCoverage || 0))}%` }} /></span><strong>{Number(item.brandCoverage || 0).toFixed(0)}%</strong></div></td>
+                        <td>{visibility?.visibilityScore ?? "N/A"}</td>
+                      </tr>
+                    );
+                  })}
+                  {!brandRankings.length ? tableEmpty(6, "No brand visibility ranking synced yet.") : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <div className="brand-detail-grid">
+            <section className="brand-section">
+              <div className="brand-section-heading"><div><h3>Configured competitors</h3><p>Brands monitored alongside {dashboard?.brand || "your brand"}.</p></div></div>
+              <div className="competitor-directory">
+                {(dashboard?.competitors || []).map((competitor) => (
+                  <div className="competitor-directory-row" key={competitor.brand}>
+                    <span className="brand-logo-small"><Building size={13} />{competitorLogoUrl(competitor) ? <img src={competitorLogoUrl(competitor)} alt="" /> : null}</span>
+                    <div><strong>{competitor.brand}</strong><small>{competitor.brandDomain || "No domain"}</small></div>
+                    <ExternalLink size={14} />
+                  </div>
+                ))}
+                {!dashboard?.competitors?.length ? <p className="brand-empty">No competitors configured.</p> : null}
+              </div>
+            </section>
+            <section className="brand-section">
+              <div className="brand-section-heading"><div><h3>Other detected brands</h3><p>Additional names found in AI responses.</p></div></div>
+              <div className="detected-brand-list">
+                {detectedBrands.slice(0, 10).map((brand, index) => <div key={brand.name}><span>{index + 1}</span><strong>{brand.name}</strong><small>{brand.mentions} mentions</small></div>)}
+                {!detectedBrands.length ? <p className="brand-empty">No additional brands detected.</p> : null}
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "audits" ? (
+        <div className="geo-tools-workspace">
+          <div className="prompt-page-header">
+            <div>
+              <p className="prompt-breadcrumb">GEO Audits / {dashboard?.brand || "Brand"}</p>
+              <h2>GEO audit tools</h2>
+              <p className="muted-text">Run crawlability and AI-readiness checks through the connected Otterly workspace.</p>
+            </div>
+          </div>
+
+          {/* New Modern Summary Widgets */}
+          <div className="geo-header-stats-grid">
+            <div className="geo-stat-card">
+              <div className="geo-stat-icon blue">
+                <Shield size={20} />
+              </div>
+              <div className="geo-stat-details">
+                <span>Total Audits Performed</span>
+                <strong>{crawlability.length + content.length}</strong>
+              </div>
+            </div>
+
+            <div className="geo-stat-card">
+              <div className="geo-stat-icon green">
+                <CheckCircle size={20} />
+              </div>
+              <div className="geo-stat-details">
+                <span>Crawl Success Rate</span>
+                <strong>{crawlSuccessRate === null ? "N/A" : `${crawlSuccessRate}%`}</strong>
+              </div>
+            </div>
+
+            <div className="geo-stat-card">
+              <div className="geo-stat-icon purple">
+                <Activity size={20} />
+              </div>
+              <div className="geo-stat-details">
+                <span>Avg Readability Index</span>
+                <strong>{averageReadability === null ? "N/A" : `${averageReadability}/100`}</strong>
+              </div>
+            </div>
+          </div>
+
+          {auditNotice ? (
+            <div className="audit-notice-alert">
+              <AlertCircle size={18} />
+              <span>{auditNotice}</span>
+            </div>
+          ) : null}
+
+          <div className="geo-tool-grid">
+            <div className="geo-tool-card crawl-card">
+              <div className="geo-tool-card-header">
+                <Shield size={18} className="icon-teal" />
+                <h4>Crawlability Checker</h4>
+              </div>
+              <p>Check whether a page can be crawled by AI search bots and identify robots.txt configuration or server permission issues.</p>
+              <div className="geo-tool-form">
+                <div className="geo-input-wrapper">
+                  <Globe size={16} className="geo-input-icon" />
+                  <input
+                    value={crawlabilityUrl}
+                    onChange={(event) => setCrawlabilityUrl(event.target.value)}
+                    placeholder="https://example.com/target-page"
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="geo-submit-btn"
+                  onClick={() => runGeoAudit("crawlability")}
+                  disabled={!crawlabilityUrl || auditSubmitting === "crawlability"}
+                >
+                  {auditSubmitting === "crawlability" ? (
+                    <>
+                      <RefreshCcw size={16} className="spinner" />
+                      Auditing Access...
+                    </>
+                  ) : (
+                    "Start Crawl Audit"
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="geo-tool-card content-card">
+              <div className="geo-tool-card-header">
+                <Activity size={18} className="icon-purple" />
+                <h4>Content Checker</h4>
+              </div>
+              <p>Evaluate page structure, HTML semantics, and dynamic element hydration to score local SGE / AI-readiness.</p>
+              <div className="geo-tool-form">
+                <div className="geo-input-wrapper">
+                  <Globe size={16} className="geo-input-icon" />
+                  <input
+                    value={contentUrl}
+                    onChange={(event) => setContentUrl(event.target.value)}
+                    placeholder="https://example.com/target-page"
+                  />
+                </div>
+                
+                <div>
+                  <div className="crawler-select-label">Crawler bot identity</div>
+                  <div className="crawler-badge-selector">
+                    {[
+                      { value: "ChatGPT-User", name: "ChatGPT User", detail: "OpenAI user agent", icon: "https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg" },
+                      { value: "OAI-SearchBot", name: "OAI SearchBot", detail: "OpenAI search bot", icon: "https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg" },
+                      { value: "PerplexityCrawler", name: "Perplexity", detail: "Perplexity crawler", icon: "https://cdn.simpleicons.org/perplexity/1f2937" },
+                      { value: "GoogleBot", name: "GoogleBot", detail: "Google crawling bot", icon: "https://cdn.simpleicons.org/google" }
+                    ].map((bot) => (
+                      <div
+                        key={bot.value}
+                        className={`crawler-badge ${contentCrawler === bot.value ? "active" : ""}`}
+                        onClick={() => setContentCrawler(bot.value)}
+                      >
+                        <div className="crawler-badge-logo">
+                          <img src={bot.icon} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                        </div>
+                        <div className="crawler-badge-info">
+                          <strong>{bot.name}</strong>
+                          <span>{bot.detail}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="geo-submit-btn"
+                  onClick={() => runGeoAudit("content")}
+                  disabled={!contentUrl || auditSubmitting === "content"}
+                >
+                  {auditSubmitting === "content" ? (
+                    <>
+                      <RefreshCcw size={16} className="spinner" />
+                      Analyzing Readiness...
+                    </>
+                  ) : (
+                    "Start Content Check"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="geo-history-grid">
+            <div className="geo-history-card">
+              <div className="geo-history-card-header">
+                <h3>Crawlability analysis history</h3>
+              </div>
+              <div className="table-wrap">
+                <table className="geo-history-table">
+                  <thead>
+                    <tr>
+                      <th>Target Webpage URL</th>
+                      <th>Crawl Status</th>
+                      <th>Robots.txt Permission</th>
+                      <th>AI Bots Access</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {crawlability.map((check) => {
+                      const isExpanded = expandedCrawlId === (check.id || check.url);
+                      const totalBots = check.serverBotAccess ? Object.keys(check.serverBotAccess).length : 0;
+                      const allowedBots = check.serverBotAccess
+                        ? Object.values(check.serverBotAccess).filter(b => b.ok).length
+                        : 0;
+                      return (
+                        <React.Fragment key={check.id || check.url}>
+                          <tr
+                            className={`geo-history-row ${isExpanded ? "expanded" : ""}`}
+                            onClick={() => setExpandedCrawlId(isExpanded ? null : (check.id || check.url))}
+                          >
+                            <td>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Globe size={14} style={{ color: '#64748b' }} />
+                                <a href={check.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                                  {check.url}
+                                </a>
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`geo-status-pill ${(check.status || "pending").toLowerCase()}`}>
+                                {check.status || "pending"}
+                              </span>
+                            </td>
+                            <td>
+                              {check.robotsTxtAnalysisResult === undefined ? (
+                                <span className="muted-text">N/A</span>
+                              ) : check.robotsTxtAnalysisResult ? (
+                                <span style={{ color: '#10b981', fontWeight: 700 }}>Allowed</span>
+                              ) : (
+                                <span style={{ color: '#ef4444', fontWeight: 700 }}>Blocked</span>
+                              )}
+                            </td>
+                            <td>
+                              <strong>
+                                {totalBots ? `${allowedBots}/${totalBots} allowed` : "N/A"}
+                              </strong>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="geo-detail-expansion-row">
+                              <td colSpan={4}>
+                                <div className="geo-detail-expansion-content">
+                                  <div className="expanded-detail-grid">
+                                    <div className="detail-card-panel">
+                                      <h4><Shield size={14} style={{ color: '#10b981' }} /> AI Search Bot Access Permissions</h4>
+                                      <div className="bots-permission-grid">
+                                        {check.serverBotAccess && Object.keys(check.serverBotAccess).length > 0 ? (
+                                          Object.entries(check.serverBotAccess).map(([botName, botVal]) => (
+                                            <div className="bot-permission-card" key={botName}>
+                                              <div className="bot-name-wrap">
+                                                <Bot size={13} style={{ color: '#5c6cf2' }} />
+                                                <strong>{botName}</strong>
+                                              </div>
+                                              <span className={`bot-access-dot ${botVal.ok ? "allowed" : "blocked"}`}>
+                                                {botVal.ok ? "Allowed" : "Blocked"}
+                                              </span>
+                                            </div>
+                                          ))
+                                        ) : (
+                                          <div className="geo-empty-state">
+                                            <Bot size={28} />
+                                            <span>No bot access logs found</span>
+                                            <p>This crawler status analysis does not contain granular user-agent records.</p>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="detail-card-panel">
+                                      <h4><FileText size={14} style={{ color: '#8b5cf6' }} /> Robots.txt parsing rules</h4>
+                                      <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px', lineHeight: 1.4 }}>
+                                        {check.robotsTxtAnalysisResult === undefined
+                                          ? "Crawl index analysis missing."
+                                          : check.robotsTxtAnalysisResult
+                                          ? "Crawl status: OK. AI Crawler agents are fully authorized to access and index this webpage content according to robots.txt."
+                                          : "Crawl status: BLOCKED. Your robots.txt file configuration restricts AI crawlers from accessing this URL."}
+                                      </p>
+                                      <pre className="robots-box">
+                                        {`# Robots.txt file permissions\nUser-agent: ChatGPT-User\nAllow: /\n\nUser-agent: Google-Extended\nAllow: /\n\nUser-agent: *\nDisallow: /admin/`}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {!crawlability.length ? (
+                      <tr>
+                        <td colSpan={4}>
+                          <div className="geo-empty-state">
+                            <Shield size={36} />
+                            <span>No crawlability checks synced yet</span>
+                            <p>Verify crawl permissions by starting your first crawl audit above.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="geo-history-card">
+              <div className="geo-history-card-header">
+                <h3>Content structure check history</h3>
+              </div>
+              <div className="table-wrap">
+                <table className="geo-history-table">
+                  <thead>
+                    <tr>
+                      <th>Target Webpage URL</th>
+                      <th>Audit Status</th>
+                      <th>Semantic Score</th>
+                      <th>Dynamic Hydration</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {content.map((check) => {
+                      const isExpanded = expandedContentId === (check.id || check.url);
+                      const overall = check.structuralAnalysis?.overallScore || 0;
+                      const dynamic = check.dynamicContent?.score || 0;
+                      const overallColor = overall >= 80 ? "#10b981" : overall >= 50 ? "#f59e0b" : "#ef4444";
+                      const dynamicColor = dynamic >= 80 ? "#10b981" : dynamic >= 50 ? "#f59e0b" : "#ef4444";
+
+                      return (
+                        <React.Fragment key={check.id || check.url}>
+                          <tr
+                            className={`geo-history-row ${isExpanded ? "expanded" : ""}`}
+                            onClick={() => setExpandedContentId(isExpanded ? null : (check.id || check.url))}
+                          >
+                            <td>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Globe size={14} style={{ color: '#64748b' }} />
+                                <a href={check.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                                  {check.url}
+                                </a>
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`geo-status-pill ${(check.status || "pending").toLowerCase()}`}>
+                                {check.status || "pending"}
+                              </span>
+                            </td>
+                            <td>
+                              <strong>{overall ? `${overall}/100` : "N/A"}</strong>
+                            </td>
+                            <td>
+                              <strong>{dynamic ? `${dynamic}/100` : "N/A"}</strong>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="geo-detail-expansion-row">
+                              <td colSpan={4}>
+                                <div className="geo-detail-expansion-content">
+                                  <div className="expanded-detail-grid">
+                                    <div className="detail-card-panel">
+                                      <h4><Activity size={14} style={{ color: '#8b5cf6' }} /> AI readiness & readability scores</h4>
+                                      <div className="score-wheel-container">
+                                        <div className="score-wheel-item">
+                                          <div className="score-wheel" style={{ background: `conic-gradient(${overallColor} ${overall * 3.6}deg, #f1f5f9 0deg)` }}>
+                                            <div className={`score-wheel-inner ${overall >= 80 ? "high" : overall >= 50 ? "medium" : "low"}`}>
+                                              {overall || 0}
+                                            </div>
+                                          </div>
+                                          <span>Structural score</span>
+                                        </div>
+
+                                        <div className="score-wheel-item">
+                                          <div className="score-wheel" style={{ background: `conic-gradient(${dynamicColor} ${dynamic * 3.6}deg, #f1f5f9 0deg)` }}>
+                                            <div className={`score-wheel-inner ${dynamic >= 80 ? "high" : dynamic >= 50 ? "medium" : "low"}`}>
+                                              {dynamic || 0}
+                                            </div>
+                                          </div>
+                                          <span>Dynamic score</span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="detail-card-panel">
+                                      <h4><CheckCircle size={14} style={{ color: '#10b981' }} /> Semantic structural checks</h4>
+                                      <div className="content-checklist">
+                                        <div className="content-checklist-item">
+                                          <span>Header hierarchy structure</span>
+                                          <strong className={check.structuralAnalysis?.headingsStructureScore >= 80 ? "good" : "attention"}>
+                                            {check.structuralAnalysis?.headingsStructureScore ? `${check.structuralAnalysis.headingsStructureScore}%` : "Passed"}
+                                          </strong>
+                                        </div>
+                                        <div className="content-checklist-item">
+                                          <span>Semantic HTML elements</span>
+                                          <strong className={check.structuralAnalysis?.semanticHtmlScore >= 80 ? "good" : "attention"}>
+                                            {check.structuralAnalysis?.semanticHtmlScore ? `${check.structuralAnalysis.semanticHtmlScore}%` : "Passed"}
+                                          </strong>
+                                        </div>
+                                        <div className="content-checklist-item">
+                                          <span>Unique element IDs</span>
+                                          <strong className={check.structuralAnalysis?.uniqueIdsScore >= 80 ? "good" : "attention"}>
+                                            {check.structuralAnalysis?.uniqueIdsScore ? `${check.structuralAnalysis.uniqueIdsScore}%` : "Passed"}
+                                          </strong>
+                                        </div>
+                                        <div className="content-checklist-item">
+                                          <span>Dynamic hydration status</span>
+                                          <strong className={check.dynamicContent?.hydrationSuccess ? "good" : "attention"}>
+                                            {check.dynamicContent?.hydrationSuccess ? "Success" : "Failed"}
+                                          </strong>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {!content.length ? (
+                      <tr>
+                        <td colSpan={4}>
+                          <div className="geo-empty-state">
+                            <Activity size={36} />
+                            <span>No content checks synced yet</span>
+                            <p>Verify page structures and HTML tags by starting a content readiness check above.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "account" ? (
+        <div className="role-grid">
+          {user.role === "DEVELOPER" && canSync ? (
+            <div className="role-card double-width-card developer-sync-card">
+              <div>
+                <div className="role-card-header"><RefreshCcw size={16} className="icon-blue" /><h4>Developer sync control</h4></div>
+                <p className="muted-text">Refresh Otterly data for the selected company from the integration account. This keeps live data out of normal client tabs.</p>
+              </div>
+              <button
+                type="button"
+                className="developer-sync-button"
+                onClick={async () => {
+                  setSyncingOtterly(true);
+                  try {
+                    await onSync();
+                  } finally {
+                    setSyncingOtterly(false);
+                  }
+                }}
+                disabled={syncingOtterly || !selectedAccountId}
+              >
+                <RefreshCcw size={15} />
+                {syncingOtterly ? "Refreshing..." : "Refresh Otterly data"}
+              </button>
+            </div>
+          ) : null}
+          <div className="role-card double-width-card account-usage-card">
+            <div className="role-card-header"><Cpu size={16} className="icon-blue" /><h4>Otterly account usage</h4></div>
+            <div className="account-plan-line"><span>Plan</span><strong>{accountInfo.subscriptionPlan || "N/A"}</strong><small>{accountInfo.subscriptionEndDate ? `Renews ${new Date(accountInfo.subscriptionEndDate).toLocaleDateString()}` : "End date unavailable"}</small></div>
+            <div className="usage-meter-grid">
+              {[
+                ["REST API requests", accountInfo.apiRequestsUsedCount, accountInfo.apiRequestsMaxCount],
+                ["MCP requests", accountInfo.mcpRequestsUsedCount, accountInfo.mcpRequestsMaxCount],
+                ["Tracked prompts", accountInfo.promptsUsedCount, accountInfo.promptsMaxCount],
+                ["GEO audits", accountInfo.geoAuditUsedCount, accountInfo.geoAuditMaxCount]
+              ].map(([label, used, maximum]) => (
+                <div className="usage-meter" key={label}>
+                  <div><span>{label}</span><strong>{used ?? 0} / {maximum ?? 0}</strong></div>
+                  <span className="usage-meter-track"><i style={{ width: `${usagePercent(used, maximum)}%` }} /></span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="role-card double-width-card sync-status-card">
+            <div className="role-card-header"><RefreshCcw size={16} className="icon-teal" /><h4>Sync status</h4></div>
+            <div className="stat-group">
+              <div className="stat-row"><span>Status</span><strong>{data?.latestSync?.status || "N/A"}</strong></div>
+              <div className="stat-row"><span>Started</span><strong>{data?.latestSync?.startedAt ? new Date(data.latestSync.startedAt).toLocaleString() : "N/A"}</strong></div>
+              <div className="stat-row"><span>Completed</span><strong>{data?.latestSync?.completedAt ? new Date(data.latestSync.completedAt).toLocaleString() : "N/A"}</strong></div>
+              <div className="stat-row"><span>Workspace</span><strong>{data?.latestSync?.workspaceId || "N/A"}</strong></div>
+              <div className="stat-row"><span>Report</span><strong>{data?.latestSync?.reportId || "N/A"}</strong></div>
+            </div>
+          </div>
+          <div className="role-card double-width-card citation-coverage-card">
+            <div className="role-card-header"><Database size={16} className="icon-gold" /><h4>Citation coverage</h4></div>
+            <p className="muted-text">Otterly's citation statistics for the tracked brand domain across the current report window.</p>
+            <div className="citation-coverage-metrics">
+              <div><span>Your domain citations</span><strong>{citationDomainStats.current ?? 0}</strong></div>
+              <div><span>Total citations observed</span><strong>{citationDomainStats.total ?? 0}</strong></div>
+              <div><span>Citation share</span><strong>{Number(citationDomainStats.citationShare || 0).toFixed(1)}%</strong></div>
+              <div><span>Ranked domains</span><strong>{rankedCitationDomains.length}</strong></div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+    </section>
+
+      {selectedPrompt ? (
+        <div className="prompt-drawer-overlay">
+          <button
+            type="button"
+            aria-label="Close prompt details"
+            className="prompt-drawer-backdrop"
+            onClick={() => {
+              setSelectedPromptId(null);
+              setSelectedResponseIndex(null);
+            }}
+          />
+          <aside className="prompt-drawer">
+            <div className="prompt-drawer-sticky">
+              <div className="prompt-drawer-header">
+                <div className="prompt-drawer-title">
+                  <span><MessageSquare size={18} /></span>
+                  <div>
+                    <h3>Prompt details</h3>
+                    <p>Responses, brand presence, and citations from Otterly</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="prompt-close-button"
+                  onClick={() => {
+                    setSelectedPromptId(null);
+                    setSelectedResponseIndex(null);
+                  }}
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="prompt-context-card">
+                <div>
+                  <span><MessageSquare size={13} /> Prompt</span>
+                  <p>{promptLabel(selectedPrompt, selectedPromptDetail)}</p>
+                </div>
+                <strong>Last 14 days</strong>
+              </div>
+              <div className="prompt-drawer-tabs">
+                {["overview", "responses"].map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => {
+                      setPromptDrawerTab(tab);
+                      if (tab === "responses") setSelectedResponseIndex(null);
+                    }}
+                    className={promptDrawerTab === tab ? "active" : ""}
+                  >
+                    {tab === "overview" ? <FileText size={15} /> : <Bot size={15} />}
+                    {tab === "overview" ? "Overview" : "Responses"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="prompt-drawer-body">
+              {promptDrawerTab === "overview" ? (
+                <div className="prompt-overview">
+                  <div className="prompt-overview-cards">
+                    <div className="prompt-info-card">
+                      <span>Country</span>
+                      <strong>{dashboard?.countries?.[0]?.toUpperCase() === "US" ? "United States" : dashboard?.countries?.[0] || "N/A"}</strong>
+                    </div>
+                    <div className="prompt-info-card">
+                      <span>Tags</span>
+                      <strong>{formatCell(selectedPromptDetail.tags || selectedPrompt.tags || [], "N/A")}</strong>
+                    </div>
+                    <div className="prompt-info-card">
+                      <span>Intent Volume</span>
+                      <div className="intent-meter large">
+                        {Array.from({ length: 5 }).map((_, index) => (
+                          <span key={index} className={index < Math.max(1, Math.min(5, Number(selectedPrompt.volume ?? selectedPromptDetail.intentVolume ?? 0))) ? "active" : ""} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="prompt-overview-section">
+                    <h4>Brand Coverage Over Time</h4>
+                    {selectedPromptCoverageHistory.length ? (
+                      <div className="coverage-history-list">
+                        {selectedPromptCoverageHistory.map((item, index) => (
+                          <div className="coverage-history-row" key={`${item.brand}-${item.date}-${index}`}>
+                            <span>{item.date ? new Date(item.date).toLocaleDateString() : item.brand || "Coverage"}</span>
+                            <div><i style={{ width: `${Math.min(100, Number(item.coverage || 0))}%` }} /></div>
+                            <strong>{Number(item.coverage || 0).toFixed(0)}%</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="overview-empty-state">
+                        <Database size={42} />
+                        <span>No data to display.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="prompt-overview-section">
+                    <h4>Brand Ranking</h4>
+                    <div className="prompt-table-card compact">
+                      <table className="prompt-table prompt-ranking-table">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Brand Name</th>
+                            <th>Sentiment</th>
+                            <th>Brand Coverage</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedPromptBrandRank.map((rankItem) => (
+                            <tr key={`${rankItem.rank}-${rankItem.brand}`}>
+                              <td>{rankItem.rank ?? "-"}</td>
+                              <td><strong>{rankItem.brand || "Unknown"}</strong></td>
+                              <td>{sentimentLabel(rankItem.sentiment)}</td>
+                              <td>{rankItem.brandCoverage !== undefined ? `${Number(rankItem.brandCoverage).toFixed(0)}%` : "N/A"}</td>
+                            </tr>
+                          ))}
+                          {!selectedPromptBrandRank.length ? tableEmpty(4, "No brand ranking data synced for this prompt.") : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="prompt-overview-section">
+                    <h4>Domain Categories Distribution</h4>
+                    {selectedPromptCategories.length ? (
+                      <div className="domain-distribution">
+                        <div className="domain-pie" style={{ background: `conic-gradient(${categoryGradient})` }} />
+                        <div className="domain-category-list">
+                          {selectedPromptCategories.map((category, index) => {
+                            const percent = totalPromptCategories ? Math.round((Number(category.value || 0) / totalPromptCategories) * 100) : 0;
+                            return (
+                              <div className="domain-category-row" key={category.category}>
+                                <span style={{ background: categoryColors[index % categoryColors.length] }} />
+                                <strong>{category.category}</strong>
+                                <em>{percent}% ({category.value})</em>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="overview-empty-state compact">
+                        <Database size={34} />
+                        <span>No data</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {promptDrawerTab === "responses" && selectedResponse === null ? (
+                <div className="prompt-response-list">
+                  <h3>AI Search Engine Responses</h3>
+                  <div className="prompt-table-card compact">
+                    <table className="prompt-table prompt-response-table">
+                      <thead>
+                        <tr>
+                          <th>AI Responses</th>
+                          <th>Brand Mentioned</th>
+                          <th>Brand Sentiment</th>
+                          <th>Competitors</th>
+                          <th>Run Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedPromptResponses.map((response, index) => (
+                          <tr key={`${response.engine}-${response.runId}-${index}`} className="prompt-table-row" onClick={() => setSelectedResponseIndex(index)}>
+                            <td className="prompt-response-cell">
+                              <span className="engine-badge">{engineLogo(response.engine)}{engineLabel(response.engine)}</span>{" "}
+                              {String(response.content || "No response content").slice(0, 86)}...
+                            </td>
+                            <td><span className={response.brandMentions?.length ? "prompt-status-pill positive" : "prompt-status-pill negative"}>{response.brandMentions?.length ? "Yes" : "No"}</span></td>
+                            <td>{formatCell(response.brandMentions?.[0]?.sentiment, "N/A")}</td>
+                            <td>{formatCell(response.competitors || [], "N/A")}</td>
+                            <td>{response.runDate ? new Date(response.runDate).toLocaleDateString() : "N/A"}</td>
+                          </tr>
+                        ))}
+                        {!selectedPromptResponses.length ? tableEmpty(5, "No AI responses synced for this prompt.") : null}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="prompt-result-count">Viewing {selectedPromptResponses.length ? `1-${selectedPromptResponses.length}` : "0"} of {selectedPromptResponses.length} results</p>
+                </div>
+              ) : null}
+
+              {promptDrawerTab === "responses" && selectedResponse !== null ? (
+                <div className="prompt-response-layout">
+                  <div className="prompt-answer-column">
+                    <button className="prompt-back-button" onClick={() => setSelectedResponseIndex(null)}>
+                      <ChevronLeft size={16} />
+                      Back to responses
+                      <span>{engineLogo(selectedResponse.engine)}{engineLabel(selectedResponse.engine)}</span>
+                    </button>
+                    <p className="prompt-question-card">{promptLabel(selectedPrompt, selectedPromptDetail)}</p>
+                    <article className="prompt-answer-card">
+                      {selectedResponse.content || "No response content synced."}
+                    </article>
+                  </div>
+                  <aside className="prompt-side-panel">
+                    <div className="prompt-panel-card">
+                      <div className="role-card-header"><Building size={15} /><h4>Brand Presence & Sentiment</h4></div>
+                      <div className="stat-row"><span>{dashboard?.brand || "Brand"}</span><strong>{selectedResponse.brandMentions?.length ? "Mentioned" : "Not mentioned"}</strong></div>
+                    </div>
+                    <div className="prompt-panel-card">
+                      <div className="role-card-header"><Globe size={15} /><h4>Sources</h4></div>
+                      <div className="prompt-source-list">
+                        {(selectedResponse.citations || []).slice(0, 8).map((citation) => (
+                          <a key={`${citation.rank}-${citation.link}`} href={citation.link} target="_blank" rel="noreferrer">
+                            <strong>{citation.rank}. {citation.title || citation.link}<ExternalLink size={12} /></strong>
+                            <span>{citation.link}</span>
+                          </a>
+                        ))}
+                        {!selectedResponse.citations?.length ? <p className="muted-text">No citations available.</p> : null}
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+              ) : null}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+
+    </>
+  );
+}
+
 const integrationPlatforms = [
+  {
+    key: "otterly",
+    name: "OtterlyAI",
+    iconClass: "icon-servicetitan",
+    initials: "OT",
+    description: "Sync real AI search visibility, prompts, citations, recommendations, and GEO audit data from OtterlyAI."
+  },
   {
     key: "servicetitan",
     name: "ServiceTitan",
@@ -927,6 +2408,8 @@ const integrationPlatforms = [
 
 function Dashboard({ user, onLogout, onUserUpdate }) {
   const [records, setRecords] = useState([]);
+  const [otterlyData, setOtterlyData] = useState(null);
+  const [otterlyTab, setOtterlyTab] = useState("overview");
   const [accounts, setAccounts] = useState(() => user.role === "DEVELOPER" ? [] : user.account ? [user.account] : []);
   const [managedUsers, setManagedUsers] = useState([]);
   const [admins, setAdmins] = useState([]);
@@ -1007,6 +2490,11 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   const [activeConnectingPlatform, setActiveConnectingPlatform] = useState(null);
   const [integrationForm, setIntegrationForm] = useState({
     apiKey: "",
+    workspaceId: "",
+    brandReportId: "",
+    brand: "",
+    brandDomain: "",
+    defaultCountry: "us",
     clientId: "",
     clientSecret: "",
     syncInterval: "1h",
@@ -1050,19 +2538,44 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
       return;
     }
 
-    await apiRequest(`/accounts/${activeIntegrationAccountId}/integrations/${activeConnectingPlatform.key}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        status: "connected",
-        config: integrationForm
-      })
-    });
+    const platformName = activeConnectingPlatform.name;
+    try {
+      const result = await apiRequest(`/accounts/${activeIntegrationAccountId}/integrations/${activeConnectingPlatform.key}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "connected",
+          config: integrationForm
+        }),
+        timeoutMs: activeConnectingPlatform.key === "otterly" ? 60000 : 15000
+      });
 
-    setActiveConnectingPlatform(null);
-    setIntegrationForm({ apiKey: "", clientId: "", clientSecret: "", syncInterval: "1h", sandbox: true });
-    await loadIntegrations(activeIntegrationAccountId);
-    await loadIntegrationOverview();
-    setNotice(`${activeConnectingPlatform.name} connected successfully.`);
+      setActiveConnectingPlatform(null);
+      setIntegrationForm({
+        apiKey: "",
+        workspaceId: "",
+        brandReportId: "",
+        brand: "",
+        brandDomain: "",
+        defaultCountry: "us",
+        clientId: "",
+        clientSecret: "",
+        syncInterval: "1h",
+        sandbox: true
+      });
+      await loadIntegrations(activeIntegrationAccountId);
+      await loadIntegrationOverview();
+      const discoveredReport = result.integration?.config?.brandReportId;
+      if (activeConnectingPlatform.key === "otterly") {
+        setNotice(`${platformName} connected. Importing the first data snapshot...`);
+        await handleSync(activeIntegrationAccountId);
+      } else {
+        setNotice(discoveredReport
+          ? `${platformName} connected. Brand Report ${discoveredReport} was assigned automatically.`
+          : `${platformName} connected successfully.`);
+      }
+    } catch (error) {
+      setNotice(error.message || `Failed to connect ${platformName}.`);
+    }
   };
 
   const handleDisconnectIntegration = async (platformKey, platformName) => {
@@ -1254,24 +2767,42 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   const canSync = user.role === "SUPER_ADMIN" || user.role === "DEVELOPER" || user.role === "BUSINESS_OWNER";
   const canManageAccounts = user.role === "DEVELOPER";
   const canManageUsers = user.role === "SUPER_ADMIN" || user.role === "DEVELOPER" || user.role === "BUSINESS_OWNER";
+  const visibleIntegrationPlatforms = user.role === "DEVELOPER"
+    ? integrationPlatforms
+    : integrationPlatforms.filter((platform) => platform.key !== "otterly");
 
   async function loadDashboard(accountId = selectedAccountId) {
     setLoading(true);
-    const targetId = user.role === "DEVELOPER" ? accountId : user.accountId;
-    const query = targetId ? `?accountId=${targetId}` : "";
-    const data = await apiRequest(`/dashboard/records${query}`);
-    setRecords(data.records);
-    setLoading(false);
+    try {
+      const targetId = user.role === "DEVELOPER" ? accountId : user.accountId;
+      if (!targetId) {
+        setRecords([]);
+        setOtterlyData(null);
+        return;
+      }
+      const query = targetId ? `?accountId=${targetId}` : "";
+      const [recordsData, otterlyPayload] = await Promise.all([
+        apiRequest(`/dashboard/records${query}`),
+        targetId ? apiRequest(`/dashboard/otterly${query}`).catch(() => null) : Promise.resolve(null)
+      ]);
+      setRecords(recordsData.records);
+      setOtterlyData(otterlyPayload);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadUsers(accountId) {
     if (!canManageUsers) return;
     setUsersLoading(true);
-    const targetId = user.role === "DEVELOPER" ? "all" : user.accountId;
-    const query = targetId ? `?accountId=${targetId}` : "";
-    const data = await apiRequest(`/auth/users${query}`);
-    setManagedUsers(data.users);
-    setUsersLoading(false);
+    try {
+      const targetId = user.role === "DEVELOPER" ? "all" : user.accountId;
+      const query = targetId ? `?accountId=${targetId}` : "";
+      const data = await apiRequest(`/auth/users${query}`);
+      setManagedUsers(data.users);
+    } finally {
+      setUsersLoading(false);
+    }
   }
 
   async function loadAdmins(accountId = selectedAccountId) {
@@ -1303,24 +2834,26 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }
 
   async function loadAccounts() {
-    if (!canManageAccounts) return;
+    if (!canManageAccounts) return user.accountId || "";
     const data = await apiRequest("/accounts");
     setAccounts(data.accounts);
-    if (!selectedAccountId && data.accounts[0]) {
-      setSelectedAccountId(data.accounts[0].id);
-      setUserForm((current) => ({ ...current, accountId: current.accountId || data.accounts[0].id }));
+    const initialAccountId = selectedAccountId || data.accounts[0]?.id || "";
+    if (!selectedAccountId && initialAccountId) {
+      setSelectedAccountId(initialAccountId);
+      setUserForm((current) => ({ ...current, accountId: current.accountId || initialAccountId }));
     }
+    return initialAccountId;
   }
 
   useEffect(() => {
     async function loadInitialData() {
-      await loadAccounts();
-      await loadDashboard();
+      const initialAccountId = await loadAccounts();
+      await loadDashboard(initialAccountId);
       if (canManageUsers) {
         const initialCompanyFilter = user.role === "DEVELOPER" ? "all" : user.accountId;
         await loadUsers(initialCompanyFilter);
-        await loadAdmins(initialCompanyFilter || selectedAccountId);
-        await loadBranches(initialCompanyFilter || selectedAccountId || user.accountId);
+        await loadAdmins(initialAccountId || user.accountId);
+        await loadBranches(initialAccountId || user.accountId);
       }
     }
 
@@ -1328,6 +2861,10 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   }, []);
 
   useEffect(() => {
+    if (activeView === "data") {
+      setActiveView("dashboard");
+      return;
+    }
     localStorage.setItem("cortexy_activeView", activeView);
   }, [activeView]);
 
@@ -1335,17 +2872,21 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     localStorage.setItem("cortexy_settingsTab", settingsTab);
   }, [settingsTab]);
 
-  async function handleSync() {
+  async function handleSync(accountIdOverride = null) {
     setNotice("");
-    const body = user.role === "DEVELOPER" ? { accountId: selectedAccountId } : {};
+    const targetAccountId = typeof accountIdOverride === "string" ? accountIdOverride : selectedAccountId;
+    const body = user.role === "DEVELOPER" ? { accountId: targetAccountId } : {};
 
     try {
       const data = await apiRequest("/dashboard/sync", {
         method: "POST",
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        timeoutMs: 120000
       });
-      setNotice(`Synced ${data.synced} records into our database.`);
-      await loadDashboard(selectedAccountId);
+      setNotice(data.provider === "otterly"
+        ? `Synced ${data.syncedResources} Otterly resources and ${data.synced} dashboard metrics.`
+        : `Synced ${data.synced} records into our database.`);
+      await loadDashboard(targetAccountId);
       await loadAccounts();
     } catch (err) {
       setNotice(err.message);
@@ -1538,14 +3079,15 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
   const totals = useMemo(() => {
     const healthy = records.filter((record) => record.status === "healthy").length;
     const accountsVisible = canManageAccounts ? accounts.length : user.accountId ? 1 : 0;
+    const kpis = otterlyData?.dashboard?.kpis;
 
     return {
-      records: records.length,
-      healthy,
+      records: otterlyData?.resources?.length ?? records.length,
+      healthy: kpis?.geoScore ?? healthy,
       accounts: accountsVisible,
       users: managedUsers.length
     };
-  }, [records, accounts, canManageAccounts, user.accountId, managedUsers]);
+  }, [records, accounts, canManageAccounts, user.accountId, managedUsers, otterlyData]);
 
   const groupedUsers = useMemo(() => {
     const rolePriority = {
@@ -1716,11 +3258,16 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
     );
   }
 
+  const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
+  const dashboardNavLabel = otterlyData?.dashboard?.brand || selectedAccount?.name || user.account?.name || "Dashboard";
   const pageTitle = {
-    dashboard: user.role === "DEVELOPER" ? "All Accounts" : user.account?.name ?? "Assigned Account",
-    data: "Stored API Data",
+    dashboard: user.role === "DEVELOPER" ? dashboardNavLabel : user.account?.name ?? "Assigned Account",
     settings: "Settings"
-  }[activeView];
+  }[activeView] || dashboardNavLabel;
+  const visibleOtterlyTabs = user.role === "DEVELOPER"
+    ? otterlyDashboardTabs
+    : otterlyDashboardTabs.filter(([key]) => key !== "account");
+  const visibleOtterlyTab = visibleOtterlyTabs.some(([key]) => key === otterlyTab) ? otterlyTab : "overview";
 
   return (
     <main className="app-shell">
@@ -1732,18 +3279,31 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
           <nav className="sidebar-nav-list">
             <button 
               className={`sidebar-nav-btn ${activeView === "dashboard" ? "active" : ""}`} 
-              onClick={() => setActiveView("dashboard")}
+              onClick={() => {
+                setActiveView("dashboard");
+                setOtterlyTab("overview");
+              }}
             >
               <BarChart3 size={18} />
-              <span>Dashboard</span>
+              <span>{dashboardNavLabel}</span>
             </button>
-            <button 
-              className={`sidebar-nav-btn ${activeView === "data" ? "active" : ""}`} 
-              onClick={() => setActiveView("data")}
-            >
-              <Database size={18} />
-              <span>Data Store</span>
-            </button>
+            {activeView === "dashboard" ? (
+              <div className="sidebar-subnav">
+                {visibleOtterlyTabs.map(([key, label, Icon]) => (
+                  <button
+                    key={key}
+                    className={`sidebar-subnav-btn ${visibleOtterlyTab === key ? "active" : ""}`}
+                    onClick={() => {
+                      setActiveView("dashboard");
+                      setOtterlyTab(key);
+                    }}
+                  >
+                    <Icon size={15} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <button 
               className={`sidebar-nav-btn ${activeView === "settings" ? "active" : ""}`} 
               onClick={() => setActiveView("settings")}
@@ -1784,29 +3344,24 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
         </header>
 
         {activeView === "dashboard" ? (
-          <>
-            <section key="dashboard-metrics" className="metrics-grid tab-transition">
-              <MetricCard label="Stored records" value={totals.records} icon={Database} />
-              <MetricCard label="Healthy metrics" value={totals.healthy} icon={BarChart3} />
-              <MetricCard label={canManageUsers ? "Managed users" : "Visible accounts"} value={canManageUsers ? totals.users : totals.accounts} icon={Users} />
-            </section>
-            
-            {/* Custom interactive dashboard matching role capabilities */}
-            <RoleDashboard 
-              user={user} 
-              records={records} 
-              accounts={accounts} 
-              branches={branches} 
-              onSync={handleSync} 
-              selectedAccountId={selectedAccountId}
-              setSelectedAccountId={setSelectedAccountId}
-              loadDashboard={loadDashboard}
-              loadUsers={loadUsers}
-              loadAdmins={loadAdmins}
-              loadBranches={loadBranches}
-              managedUsers={managedUsers}
-            />
-          </>
+          <OtterlyDashboardPanel
+            data={otterlyData}
+            loading={loading}
+            canSync={canSync}
+            onSync={handleSync}
+            onReload={() => loadDashboard(selectedAccountId)}
+            accounts={accounts}
+            selectedAccountId={selectedAccountId}
+            setSelectedAccountId={(id) => {
+              setSelectedAccountId(id);
+              loadDashboard(id);
+              loadUsers(id);
+              loadAdmins(id);
+              loadBranches(id);
+            }}
+            user={user}
+            activeTab={visibleOtterlyTab}
+          />
         ) : null}
 
         {notice ? <p className="notice">{notice}</p> : null}
@@ -2699,7 +4254,7 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {integrationPlatforms.map((platform) => {
+                      {visibleIntegrationPlatforms.map((platform) => {
                         const row = connectedIntegrations.find((item) => item.platformKey === platform.key);
                         const isConnected = row?.status === "connected";
                         return (
@@ -2737,7 +4292,21 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={() => setActiveConnectingPlatform(platform)}
+                                  onClick={() => {
+                                    setIntegrationForm({
+                                      apiKey: row?.config?.apiKey || "",
+                                      workspaceId: row?.config?.workspaceId || "",
+                                      brandReportId: row?.config?.brandReportId || "",
+                                      brand: row?.config?.brand || "",
+                                      brandDomain: row?.config?.brandDomain || "",
+                                      defaultCountry: row?.config?.defaultCountry || "us",
+                                      clientId: row?.config?.clientId || "",
+                                      clientSecret: row?.config?.clientSecret || "",
+                                      syncInterval: row?.config?.syncInterval || "1h",
+                                      sandbox: row?.config?.sandbox ?? true
+                                    });
+                                    setActiveConnectingPlatform(platform);
+                                  }}
                                   className="btn-add-user secondary-button"
                                   style={{ height: '34px', padding: '0 14px' }}
                                   disabled={!activeIntegrationAccountId}
@@ -2757,59 +4326,6 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
           </section>
         ) : null}
 
-        {activeView === "dashboard" || activeView === "data" ? (
-          <section key="dashboard-data" className="data-section tab-transition">
-            <div className="section-header">
-              <h2>Dashboard data</h2>
-              <span>{loading ? "Loading..." : `${records.length} rows`}</span>
-            </div>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Metric</th>
-                    <th className="align-right">Value</th>
-                    <th>Status</th>
-                    <th>Account</th>
-                    <th className="align-right">Updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {records.map((record) => (
-                    <tr key={record.id} className="data-row">
-                      <td><strong className="metric-title">{record.title}</strong></td>
-                      <td className="align-right font-mono value-cell">{record.metric.toLocaleString()}</td>
-                      <td>
-                        <span className={`status ${record.status}`}>
-                          {record.status === "healthy" ? <CheckCircle size={14} style={{marginRight: '6px'}}/> : null}
-                          {record.status === "attention" ? <AlertCircle size={14} style={{marginRight: '6px'}}/> : null}
-                          {record.status}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="account-cell">
-                          <Database size={14} className="cell-icon"/>
-                          {record.account?.name ?? "Global"}
-                        </div>
-                      </td>
-                      <td className="align-right muted-text font-mono" style={{fontSize: '12px'}}>{new Date(record.occurredAt).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                  {!records.length && !loading ? (
-                    <tr>
-                      <td colSpan="5" className="empty-state">
-                        <div className="empty-state-content">
-                          <Database size={32} className="empty-icon" />
-                          <p>No stored records yet. Sync the API to create the first dashboard rows.</p>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        ) : null}
       </section>
 
       {activeConnectingPlatform ? (
@@ -2835,6 +4351,63 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
+              {activeConnectingPlatform.key === "otterly" ? (
+                <>
+                  <div className="settings-field">
+                    <span className="settings-field-span">Otterly API Key <span className="settings-field-required">*</span></span>
+                    <input
+                      type="password"
+                      required
+                      placeholder="oai_live_..."
+                      value={integrationForm.apiKey}
+                      onChange={e => setIntegrationForm({ ...integrationForm, apiKey: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <span className="settings-field-span">Workspace ID <span className="settings-field-required">*</span></span>
+                    <input
+                      type="text"
+                      required
+                      placeholder="01..."
+                      value={integrationForm.workspaceId}
+                      onChange={e => setIntegrationForm({ ...integrationForm, workspaceId: e.target.value })}
+                    />
+                    <small className="muted-text">Cortexy will discover and assign the matching Brand Report ID automatically.</small>
+                  </div>
+
+                  <div className="settings-field">
+                    <span className="settings-field-span">Brand hint (optional)</span>
+                    <input
+                      type="text"
+                      placeholder="Justclara"
+                      value={integrationForm.brand}
+                      onChange={e => setIntegrationForm({ ...integrationForm, brand: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <span className="settings-field-span">Domain</span>
+                    <input
+                      type="text"
+                      placeholder="justclara.ai"
+                      value={integrationForm.brandDomain}
+                      onChange={e => setIntegrationForm({ ...integrationForm, brandDomain: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="settings-field">
+                    <span className="settings-field-span">Default Country</span>
+                    <input
+                      type="text"
+                      placeholder="us"
+                      value={integrationForm.defaultCountry}
+                      onChange={e => setIntegrationForm({ ...integrationForm, defaultCountry: e.target.value.toLowerCase() })}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
               <div className="settings-field">
                 <span className="settings-field-span">API Client ID <span className="settings-field-required">*</span></span>
                 <input 
@@ -2856,6 +4429,8 @@ function Dashboard({ user, onLogout, onUserUpdate }) {
                   onChange={e => setIntegrationForm({ ...integrationForm, clientSecret: e.target.value })}
                 />
               </div>
+                </>
+              )}
 
               <div className="settings-field">
                 <span className="settings-field-span">Sync Interval</span>
