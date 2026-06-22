@@ -2,7 +2,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { accountScopeFor, requireAuth, requireRole } from "../auth.js";
 import { store } from "../db.js";
-import { fetchOtterlyBundle, OtterlyApiClient } from "../otterlyApi.js";
+import { runContentAudit, runCrawlabilityAudit } from "../geoAudit.js";
+import { fetchOtterlyBundle } from "../otterlyApi.js";
 
 export const dashboardRoutes = Router();
 const activeSyncAccounts = new Set();
@@ -38,6 +39,24 @@ dashboardRoutes.get("/records", requireAuth, async (req, res) => {
     });
   }
 
+  if (req.user.role !== "DEVELOPER") {
+    records = records.map((record) => {
+      let raw = record.raw;
+      try {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : { ...(raw || {}) };
+        if (String(parsed.provider || "").toLowerCase() === "otterly") parsed.provider = "cortexy";
+        raw = typeof raw === "string" ? JSON.stringify(parsed) : parsed;
+      } catch {
+        raw = {};
+      }
+      return {
+        ...record,
+        sourceId: String(record.sourceId || "").replace(/^otterly:/i, "visibility:"),
+        raw
+      };
+    });
+  }
+
   res.json({
     source: "cortexy-database",
     accountId: scope.accountId,
@@ -45,7 +64,7 @@ dashboardRoutes.get("/records", requireAuth, async (req, res) => {
   });
 });
 
-dashboardRoutes.get("/otterly", requireAuth, async (req, res) => {
+async function visibilityDashboard(req, res) {
   const scope = accountScopeFor(req.user, req.query.accountId);
   const accountId = scope.accountId || req.user.accountId;
 
@@ -59,17 +78,39 @@ dashboardRoutes.get("/otterly", requireAuth, async (req, res) => {
     store.getAccountIntegration(accountId, "otterly")
   ]);
 
+  const isDeveloper = req.user.role === "DEVELOPER";
+  const publicResources = isDeveloper
+    ? resources
+    : resources.filter((resource) => ![
+        "account-info",
+        "workspaces",
+        "brand-reports",
+        "workspace-tags"
+      ].includes(resource.resourceType));
+  const dashboard = buildOtterlyDashboard(publicResources, latestSync);
+  if (!isDeveloper) delete dashboard.accountInfo;
+
   res.json({
     source: "cortexy-database",
     accountId,
-    integration,
-    latestSync,
-    resources,
-    dashboard: buildOtterlyDashboard(resources, latestSync)
+    availability: resources.length ? "ready" : "empty",
+    ...(isDeveloper ? { integration, latestSync } : {
+      latestSync: latestSync ? {
+        status: latestSync.status,
+        startedAt: latestSync.startedAt,
+        completedAt: latestSync.completedAt,
+        summary: latestSync.summary
+      } : null
+    }),
+    resources: publicResources,
+    dashboard
   });
-});
+}
 
-dashboardRoutes.post("/sync", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
+dashboardRoutes.get("/visibility", requireAuth, visibilityDashboard);
+dashboardRoutes.get("/otterly", requireAuth, requireRole("DEVELOPER"), visibilityDashboard);
+
+dashboardRoutes.post("/sync", requireAuth, requireRole("DEVELOPER"), async (req, res) => {
   const accountId =
     req.user.role === "DEVELOPER"
       ? req.body.accountId || req.user.accountId
@@ -161,10 +202,11 @@ const geoAuditSchema = z.object({
   accountId: z.string().optional(),
   url: z.string().url(),
   crawlerIdentity: z.enum(["ChatGPT-User", "OAI-SearchBot", "PerplexityCrawler", "GoogleBot"]).optional(),
+  sendCrawlerHeader: z.boolean().optional(),
   sendOtterlyHeader: z.boolean().optional()
 });
 
-dashboardRoutes.post("/otterly/audits/:type", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), async (req, res) => {
+async function visibilityAudit(req, res) {
   const type = req.params.type;
   if (!["crawlability", "content"].includes(type)) {
     return res.status(404).json({ message: "Unsupported audit type" });
@@ -178,31 +220,14 @@ dashboardRoutes.post("/otterly/audits/:type", requireAuth, requireRole("SUPER_AD
 
   try {
     const otterlyConfig = await store.getAccountIntegrationRawConfig(accountId, "otterly");
-    if (!otterlyConfig?.apiKey || !otterlyConfig?.workspaceId || !otterlyConfig?.brandReportId) {
-      return res.status(400).json({ message: "Otterly integration must be connected before running GEO audits." });
-    }
-
-    const client = new OtterlyApiClient({ apiKey: otterlyConfig.apiKey });
+    const workspaceId = otterlyConfig?.workspaceId || `cortexy:${accountId}`;
     const created = type === "crawlability"
-      ? await client.createCrawlabilityCheck({ workspaceId: otterlyConfig.workspaceId, url: body.url })
-      : await client.createContentCheck({
-        workspaceId: otterlyConfig.workspaceId,
-        url: body.url,
-        crawlerIdentity: body.crawlerIdentity,
-        sendOtterlyHeader: body.sendOtterlyHeader
-      });
+      ? await runCrawlabilityAudit(body.url, workspaceId)
+      : await runContentAudit(body.url, workspaceId, body.crawlerIdentity, body.sendCrawlerHeader ?? body.sendOtterlyHeader);
 
     const existingResources = await store.getOtterlyResourceMap(accountId);
-    const [crawlabilityResult, contentResult] = await Promise.allSettled([
-      client.listCrawlabilityChecks(otterlyConfig.workspaceId),
-      client.listContentChecks(otterlyConfig.workspaceId)
-    ]);
-    const crawlabilityChecks = crawlabilityResult.status === "fulfilled"
-      ? crawlabilityResult.value
-      : existingResources["crawlability-checks"]?.payload || { items: [] };
-    const contentChecks = contentResult.status === "fulfilled"
-      ? contentResult.value
-      : existingResources["content-checks"]?.payload || { items: [] };
+    const crawlabilityChecks = existingResources["crawlability-checks"]?.payload || { items: [] };
+    const contentChecks = existingResources["content-checks"]?.payload || { items: [] };
 
     const normalizeAuditList = (payload, audit) => {
       const items = Array.isArray(payload.items) ? payload.items : [];
@@ -216,54 +241,37 @@ dashboardRoutes.post("/otterly/audits/:type", requireAuth, requireRole("SUPER_AD
     const resources = [
       {
         resourceType: "crawlability-checks",
-        resourceKey: otterlyConfig.workspaceId,
+        resourceKey: workspaceId,
         payload: nextCrawlabilityChecks
       },
       {
         resourceType: "content-checks",
-        resourceKey: otterlyConfig.workspaceId,
+        resourceKey: workspaceId,
         payload: nextContentChecks
       }
     ];
 
     await store.upsertOtterlyResources(accountId, {
-      workspaceId: otterlyConfig.workspaceId,
-      reportId: otterlyConfig.brandReportId,
+      workspaceId,
+      reportId: otterlyConfig?.brandReportId,
       resources
     });
 
     res.status(201).json({
+      provider: "cortexy",
       auditType: type,
       audit: created,
       crawlabilityChecks: nextCrawlabilityChecks,
-      contentChecks: nextContentChecks,
-      refreshWarnings: [
-        ...(crawlabilityResult.status === "rejected" ? ["Crawlability history refresh is delayed."] : []),
-        ...(contentResult.status === "rejected" ? ["Content history refresh is delayed."] : [])
-      ]
+      contentChecks: nextContentChecks
     });
   } catch (error) {
-    console.error("GEO AUDIT API ERROR:", {
-      message: error.message,
-      status: error.status,
-      payload: error.payload
-    });
-    const limitExceeded = error.status === 429 || /team request limit exceeded/i.test(error.message || "");
-    if (limitExceeded) {
-      return res.status(429).json({
-        code: "OTTERLY_REQUEST_LIMIT",
-        message: "Otterly's team request limit has been reached. Wait for the Otterly quota to reset or increase the account limit before starting another audit."
-      });
-    }
-    if (error.status === 403) {
-      return res.status(403).json({
-        code: "OTTERLY_AUDIT_FORBIDDEN",
-        message: "Otterly denied GEO audit creation for this API key and workspace. Audit write access requires an eligible Otterly plan and API key permissions."
-      });
-    }
-    res.status(error.status || 500).json({ message: error.message || "Failed to run GEO audit" });
+    console.error("CORTEXY GEO AUDIT ERROR:", error.message);
+    res.status(400).json({ code: "CORTEXY_AUDIT_FAILED", message: error.message || "Failed to run GEO audit" });
   }
-});
+}
+
+dashboardRoutes.post("/visibility/audits/:type", requireAuth, requireRole("SUPER_ADMIN", "DEVELOPER", "BUSINESS_OWNER"), visibilityAudit);
+dashboardRoutes.post("/otterly/audits/:type", requireAuth, requireRole("DEVELOPER"), visibilityAudit);
 
 function resourcePayload(resources, type) {
   return resources.find((resource) => resource.resourceType === type)?.payload || null;
@@ -389,10 +397,10 @@ function buildCortexyInsights({ report, stats, citations, prompts, recommendatio
     .slice(0, 5);
   if (topRecommendations.length) {
     insights.push({
-      type: "otterly-recommendations",
+      type: "visibility-recommendations",
       priority: "medium",
-      title: "Convert Otterly recommendations into tasks",
-      detail: "The highest priority Otterly recommendations should become Cortexy implementation tasks.",
+      title: "Convert visibility recommendations into tasks",
+      detail: "The highest priority visibility recommendations should become Cortexy implementation tasks.",
       items: topRecommendations
     });
   }
@@ -402,7 +410,7 @@ function buildCortexyInsights({ report, stats, citations, prompts, recommendatio
       type: "prompt-setup",
       priority: "high",
       title: "No prompt data synced yet",
-      detail: "Add prompts in Otterly or wait for Otterly to complete the first run, then sync again."
+      detail: "Add tracked prompts or wait for the next data refresh to complete."
     });
   }
 

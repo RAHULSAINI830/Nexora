@@ -1,6 +1,8 @@
 import { config } from "./config.js";
 
 const DEFAULT_LIMIT = 100;
+const DEFAULT_REQUEST_TIMEOUT_MS = 25000;
+const PROMPT_REQUEST_CONCURRENCY = 4;
 
 function formatDate(date) {
   return date.toISOString().slice(0, 10);
@@ -27,6 +29,22 @@ function appendParams(url, params = {}) {
   }
 }
 
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
 export class OtterlyApiClient {
   constructor({ apiKey, baseUrl = config.otterlyApiUrl } = {}) {
     this.apiKey = apiKey || config.otterlyApiKey;
@@ -41,15 +59,31 @@ export class OtterlyApiClient {
     const url = new URL(path, this.baseUrl);
     appendParams(url, params);
 
-    const response = await fetch(url.toString(), {
-      method: options.method || "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-        ...(options.body ? { "Content-Type": "application/json" } : {})
-      },
-      ...(options.body ? { body: JSON.stringify(options.body) } : {})
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_REQUEST_TIMEOUT_MS);
+    let response;
+
+    try {
+      response = await fetch(url.toString(), {
+        method: options.method || "GET",
+        signal: controller.signal,
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+          ...(options.body ? { "Content-Type": "application/json" } : {})
+        },
+        ...(options.body ? { body: JSON.stringify(options.body) } : {})
+      });
+    } catch (error) {
+      if (error.name === "AbortError") {
+        const timeoutError = new Error(`Otterly timed out while loading ${path}. Please retry the sync.`);
+        timeoutError.status = 504;
+        throw timeoutError;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const text = await response.text();
     let payload = {};
@@ -265,15 +299,22 @@ export async function fetchOtterlyBundle({
   const promptItems = prompts.items || [];
   const promptDetails = [];
   const aiResponses = [];
-  for (const prompt of promptItems) {
+  const promptResources = await mapWithConcurrency(promptItems, PROMPT_REQUEST_CONCURRENCY, async (prompt) => {
     const promptId = prompt.id || prompt.promptId;
-    if (!promptId) continue;
+    if (!promptId) return null;
     const [detail, responses] = await Promise.all([
       client.getPrompt(reportId, promptId, reportParams),
       client.listPromptAiResponses(reportId, promptId, reportParams)
     ]);
-    promptDetails.push(detail);
-    aiResponses.push({ promptId, prompt: prompt.prompt || detail.prompt, ...responses });
+    return {
+      detail,
+      responses: { promptId, prompt: prompt.prompt || detail.prompt, ...responses }
+    };
+  });
+  for (const item of promptResources) {
+    if (!item) continue;
+    promptDetails.push(item.detail);
+    aiResponses.push(item.responses);
   }
   add("prompt-details", `${reportId}:${activeCountry}`, { items: promptDetails }, { country: activeCountry });
   add("ai-responses", `${reportId}:${activeCountry}`, { items: aiResponses }, { country: activeCountry });

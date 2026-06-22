@@ -121,11 +121,7 @@ accountRoutes.get("/:id/integrations", requireAuth, requireRole("SUPER_ADMIN", "
   }
 
   const integrations = await store.listAccountIntegrations(req.params.id);
-  res.json({
-    integrations: req.user.role === "DEVELOPER"
-      ? integrations
-      : integrations.filter((integration) => integration.platformKey !== "otterly")
-  });
+  res.json({ integrations: req.user.role === "DEVELOPER" ? integrations : [] });
 });
 
 const updateIntegrationSchema = z.object({
@@ -184,48 +180,74 @@ accountRoutes.patch("/:id/integrations/:platformKey", requireAuth, requireRole("
       });
     }
 
-    const account = await store.findAccountById(req.params.id);
-    const client = new OtterlyApiClient({ apiKey: nextConfig.apiKey });
-    const reports = await client.listBrandReports(nextConfig.workspaceId);
-    const reportItems = reports.items || [];
-    if (!reportItems.length) {
-      return res.status(400).json({ message: "No brand reports were found in this Otterly workspace." });
-    }
+    try {
+      const account = await store.findAccountById(req.params.id);
+      const client = new OtterlyApiClient({ apiKey: nextConfig.apiKey });
+      const reports = await client.listBrandReports(nextConfig.workspaceId);
+      const reportItems = reports.items || [];
+      if (!reportItems.length) {
+        return res.status(400).json({ message: "No brand reports were found in this Otterly workspace." });
+      }
 
-    const normalize = (value) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-    const targetNames = new Set([
-      account?.name,
-      account?.slug,
-      nextConfig.brand,
-      nextConfig.brandDomain
-    ].map(normalize).filter(Boolean));
-    const matchingReport = reportItems.find((report) => [
-      report.brand,
-      report.reportTitle,
-      report.brandDomain
-    ].map(normalize).some((value) => targetNames.has(value)));
-    const selectedReport = matchingReport || (reportItems.length === 1 ? reportItems[0] : null);
-    if (!selectedReport) {
-      return res.status(409).json({
-        message: `Multiple Otterly brand reports were found and none matched ${account?.name || "this company"}. Add the company brand or domain and try again.`,
-        reports: reportItems.map((report) => ({
-          id: report.id,
-          brand: report.brand,
-          brandDomain: report.brandDomain,
-          reportTitle: report.reportTitle
-        }))
+      const normalize = (value) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+      const targetNames = new Set([
+        account?.name,
+        account?.slug,
+        nextConfig.brand,
+        nextConfig.brandDomain
+      ].map(normalize).filter(Boolean));
+      const matchingReport = reportItems.find((report) => [
+        report.brand,
+        report.reportTitle,
+        report.brandDomain
+      ].map(normalize).some((value) => targetNames.has(value)));
+      const selectedReport = matchingReport || (reportItems.length === 1 ? reportItems[0] : null);
+      if (!selectedReport) {
+        return res.status(409).json({
+          message: `Multiple Otterly brand reports were found and none matched ${account?.name || "this company"}. Add the company brand or domain and try again.`,
+          reports: reportItems.map((report) => ({
+            id: report.id,
+            brand: report.brand,
+            brandDomain: report.brandDomain,
+            reportTitle: report.reportTitle
+          }))
+        });
+      }
+
+      const reportId = selectedReport.id || selectedReport.reportId;
+      if (!reportId) {
+        return res.status(502).json({ message: "Otterly returned a brand report without an ID." });
+      }
+      const report = await client.getBrandReport(reportId);
+      nextConfig.brandReportId = reportId;
+      nextConfig.brand = report.brand || selectedReport.brand || account?.name;
+      nextConfig.brandDomain = report.brandDomain || selectedReport.brandDomain || "";
+      nextConfig.defaultCountry = nextConfig.defaultCountry || report.countries?.[0] || "us";
+    } catch (error) {
+      const upstreamStatus = Number(error.status);
+      const limitExceeded = upstreamStatus === 429 || /team request limit exceeded|request limit/i.test(error.message || "");
+      const status = limitExceeded
+        ? 429
+        : upstreamStatus === 401 || upstreamStatus === 403
+          ? upstreamStatus
+          : upstreamStatus === 504
+            ? 504
+            : 502;
+      const message = limitExceeded
+        ? "Otterly's team request limit has been reached. Wait for the quota to reset or increase the Otterly account limit."
+        : upstreamStatus === 401
+          ? "Otterly rejected this API key. Check the key and try again."
+          : upstreamStatus === 403
+            ? "This Otterly API key cannot access the selected workspace."
+            : upstreamStatus === 404
+              ? "The Otterly workspace could not be found for this API key."
+              : error.message || "Cortexy could not verify the Otterly workspace.";
+
+      return res.status(status).json({
+        code: limitExceeded ? "OTTERLY_REQUEST_LIMIT" : "OTTERLY_CONNECTION_FAILED",
+        message
       });
     }
-
-    const reportId = selectedReport.id || selectedReport.reportId;
-    if (!reportId) {
-      return res.status(502).json({ message: "Otterly returned a brand report without an ID." });
-    }
-    const report = reportId ? await client.getBrandReport(reportId) : selectedReport;
-    nextConfig.brandReportId = reportId;
-    nextConfig.brand = report.brand || selectedReport.brand || account?.name;
-    nextConfig.brandDomain = report.brandDomain || selectedReport.brandDomain || "";
-    nextConfig.defaultCountry = nextConfig.defaultCountry || report.countries?.[0] || "us";
   }
   if (body.status === "disconnected") {
     for (const key of Object.keys(nextConfig)) delete nextConfig[key];
